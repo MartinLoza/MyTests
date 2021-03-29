@@ -1,0 +1,75 @@
+---
+title: "Eigenvalues"
+output: html_notebook
+author: "Martin Loza"
+date: "29-03-2021"
+---
+
+On this test we will manually calculate the eigenvalues related with PCA and compare them with the ones given by the "prcomp" function
+
+```{r setup}
+library(here)
+library(matrixStats)
+```
+
+# Load data
+For this example we will use the Iris dataset. We drop the fifth column as it's related with the SpEcies of the flowers, which is not of interest on this test.
+
+```{r}
+data <- iris[-5]
+head(data)
+```
+
+# Center the data
+The data needs to be center for the calculation of the covariance matrix
+
+```{r}
+data <- scale(x = data, center = TRUE, scale = FALSE)
+```
+
+# PCA 
+To compare, we first obtain the PCA representation and calculate the eigen-values. The eigen-values can be obtain from the standard deviation returned by the "prcomp" function.
+
+```{r}
+pca <- prcomp(x = data, center = FALSE, scale. = FALSE)
+eig <- (pca$sdev)^2
+eig
+```
+# Calculate the covariance matrix
+For comparison, we first manually calculate the covariance matrix and then use the "cov" function.
+
+## Manually calculation
+
+```{r}
+m1 <- t(as.matrix(data)) %*% as.matrix(data) / (nrow(data)-1)
+m1
+```
+## Calculation using the "cov" function
+
+```{r}
+m2 <- cov(x = data)
+m2
+```
+
+We can observe that the eigen-values of the two methods are similar. Also the obtained values are similar to those calculated from the results of the "prcomp" function. 
+
+```{r}
+(eigen(m1)$values - eigen(m2)$values) < 1e-10
+(eigen(m2)$values - eig) < 1e-10
+eig
+```
+
+CONCLUSIONS:
+We can easily obtain the eigen-values of our data without needing to do principal component analysis. This eigen values can be used on further analysis with a lower computational cost. 
+
+
+
+
+
+
+
+
+
+
+
+
