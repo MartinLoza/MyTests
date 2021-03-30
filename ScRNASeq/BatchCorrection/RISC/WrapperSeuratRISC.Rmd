@@ -1,0 +1,166 @@
+---
+title: "Wrapper Seurat -> RISC -> Seurat"
+output: html_notebook
+author: "Martin Loza"
+data: "30-03-2021"
+---
+
+On this workflow I will create and use a wrapper function to ease the usage of RISC with Seurat objects.
+
+```{r setup}
+library(Seurat)
+library(RISC)
+library(ggplot2)
+library(splatter)
+library(patchwork)
+
+seed = 12
+
+set.seed(seed)
+mytheme <- theme_classic() + theme(text = element_text(size = 20)) 
+theme_set(mytheme)
+testName <- "Simulation"
+
+options(future.globals.maxSize = 4e10)
+
+knitr::opts_chunk$set(
+	fig.align = "center",
+	fig.height = 5,
+	fig.width = 10
+)
+```
+
+# Simulate data with Splatter
+
+We use a simple simulated dataset with three celltypes and two batches.
+
+```{r}
+nCells = 1200
+nGenes = 2000
+
+params <- newSplatParams(batchCells = c(nCells,nCells),
+                         nGenes = nGenes)
+
+sim <- splatSimulate(params,
+                     method = "groups",
+                     group.prob = c(0.4,0.3,0.3), 
+                     de.prob = c(0.2,0.25,0.35), 
+                     seed = seed,
+                     verbose = FALSE)
+
+md <- data.frame(colData(sim))
+x <- CreateSeuratObject(counts = assay(sim , "counts"), assay = "RNA", 
+                        min.cells = 5, project = testName, meta.data = md)
+
+xl <- SplitObject(x, split.by = "Batch")
+
+x
+xl
+```
+# Create wrapper function
+For now, the wrapper function involves again to normalize and define variable features using the specific RISC functions as this ease the interaction and correction using RISC objects.# TODO: Explore the RISC object and find a way to directly assign normalized data and variable features.
+
+```{r}
+RunRISC <- function(Uncorrected = NULL, batch = NULL){
+  
+  if(!is.list(Uncorrected)){
+    yl <- SplitObject(Uncorrected, split.by = batch)
+  }else{
+    yl <- Uncorrected
+  }
+  
+  yl <- lapply(X = yl, FUN = GetAssayData, assay = "RNA", slot = "counts")
+  
+  # Pre-processing steps using RISC
+  yl <- lapply(yl, FUN = function(i){
+    tmp <- as.matrix(i)
+    genes <- data.frame(rownames(tmp))
+    rownames(genes) <- rownames(tmp)
+    cell <- data.frame(colnames(tmp))
+    rownames(cell) <- colnames(tmp)
+    return(RISC::readscdata(count = tmp, cell = cell, gene = genes))
+  })
+
+  yl <- lapply(yl, scFilter)
+  yl <- lapply(yl, scNormalize)
+  yl <- lapply(yl, scDisperse)
+  
+  y <- RISC::scMultiIntegrate(objects = yl)
+  rm(yl)
+
+  # Re-arrange data to use Seurat objects
+  colData <- y@coldata
+  rowData <- y@rowdata
+  tmp <- as.matrix(y@assay$logcount)
+  colnames(tmp) <- colData$scBarcode
+  rownames(tmp) <- rowData$Symbol
+  rm(y)
+  
+  if(is.list(Uncorrected)){
+    x <- Reduce(merge, Uncorrected)
+  }else{
+    x <- Uncorrected
+  }
+  
+  x <- x[rowData$Symbol, colData$scBarcode] 
+  x[["integrated"]] <- Seurat::CreateAssayObject(counts = tmp)
+  DefaultAssay(x) <- "integrated"
+  
+  return(x)
+}
+```
+
+# Correct-batch effects 
+
+We first test the wrapper function using a single Seurat object
+
+```{r}
+x <- RunRISC(Uncorrected = x, batch = "Batch")
+x
+```
+Now we test using a list of Seurat objects. 
+
+```{r}
+x2 <- RunRISC(Uncorrected = xl, batch = "Batch")
+x2
+```
+
+# Visualization
+
+Once we get our Seurat objects with the corrected assay, we perform PCA and choose the number of dimensions by looking at the elbow plots of the standard deviation of the principal components. On this case we think that 10 dimension would be enough to capture the majority of information from our integrated dataset.
+
+```{r}
+VariableFeatures(x) <- rownames(x)
+VariableFeatures(x2) <- rownames(x2)
+x <-  ScaleData(x, verbose = FALSE)
+x2 <-  ScaleData(x2, verbose = FALSE)
+x <- RunPCA(x, npcs = 20, verbose = FALSE)
+x2 <- RunPCA(x2, npcs = 20, verbose = FALSE)
+ElbowPlot(x) + ElbowPlot(x2)
+```
+We then run umap using the first 10 dimensions from PCA
+
+```{r}
+x <- RunUMAP(x, reduction = "pca", dims = 1:10)
+x2 <- RunUMAP(x2, reduction = "pca", dims = 1:10)
+```
+# Plots
+
+Finally we can plot our data and color the cells by group and batch to visually verify the mixing among batches.
+
+```{r}
+Seurat::DimPlot(x, group.by = "Group") + Seurat::DimPlot(x, group.by = "Batch")
+Seurat::DimPlot(x2, group.by = "Group") + Seurat::DimPlot(x2, group.by = "Batch") 
+
+Seurat::DimPlot(x, group.by = "Group", reduction = "pca") +
+  Seurat::DimPlot(x, group.by = "Batch", reduction = "pca")
+Seurat::DimPlot(x2, group.by = "Group", reduction = "pca") + 
+  Seurat::DimPlot(x2, group.by = "Batch", reduction = "pca")
+```
+
+CONCLUSIONS: The wrapper function works with a single or a list of Seurat objects. Again, the integrations look nice on this scenario, but it is still necessary to asses RISC in more complicated scenarios. The groups from the UMAP plot look a bit deformed (e.g. non-circular) as compared with previous experiences with other batch-effects correction tools.
+
+
+
+
+
