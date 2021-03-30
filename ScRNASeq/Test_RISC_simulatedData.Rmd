@@ -1,0 +1,140 @@
+---
+title: "Test RISC on simulated data"
+output: html_notebook
+author: "Martin Loza"
+data: "30-03-2021"
+---
+
+This is my first test using the RISC tool to integrate sc-RNA-seq datasets. 
+
+```{r setup}
+library(Seurat)
+library(RISC)
+library(ggplot2)
+library(splatter)
+
+seed = 12
+
+set.seed(seed)
+mytheme <- theme_classic() + theme(text = element_text(size = 20)) 
+theme_set(mytheme)
+saveFig <- FALSE
+testName <- "PseudoBatches"
+
+options(future.globals.maxSize = 4e10)
+
+knitr::opts_chunk$set(
+  fig.width = 10,
+  fig.height = 5,
+  fig.align = "center"
+)
+```
+
+# Simulate data with Splatter
+
+In this test we simulated a simple dataset with three celltypes and two batches.
+
+```{r}
+nCells = 1200
+nGenes = 2000
+
+params <- newSplatParams(batchCells = c(nCells,nCells),
+                         nGenes = nGenes)
+
+sim <- splatSimulate(params,
+                     method = "groups",
+                     group.prob = c(0.4,0.3,0.3), 
+                     de.prob = c(0.2,0.25,0.35), 
+                     seed = seed,
+                     verbose = FALSE)
+
+md <- data.frame(colData(sim))
+x <- CreateSeuratObject(counts = assay(sim , "counts"), assay = "RNA", 
+                        min.cells = 5, project = testName, meta.data = md)
+
+xl <- SplitObject(x, split.by = "Batch" )
+xl
+```
+# Data preprocessing
+
+We normalize and find the variable features using the Seurat pre-processing steps
+
+```{r}
+xl <- lapply(xl, NormalizeData, verbose = FALSE)
+xl <- lapply(xl, FindVariableFeatures, verbose = FALSE)
+```
+
+For now the datasets contains the same features. For tests using real data we might need to find a set of common variables features.
+
+```{r}
+yl <- lapply(X = xl, FUN = GetAssayData, assay = "RNA", slot = "counts")
+```
+
+# Pre-processing steps using RISC
+
+To easy utilize RISC to correct batch-effects we need to use their pre-processing steps. Perhaps we would like to modify this when benchmarking with other correction techniques.
+
+```{r}
+yl <- lapply(yl, FUN = function(i){
+  tmp <- as.matrix(i)
+  genes <- data.frame(rownames(tmp))
+  rownames(genes) <- rownames(tmp)
+  cell <- data.frame(colnames(tmp))
+  rownames(cell) <- colnames(tmp)
+  return(RISC::readscdata(count = tmp, cell = cell, gene = genes, is.filter = TRUE))
+})
+
+yl <- lapply(yl, scFilter)
+yl <- lapply(yl, scNormalize)
+yl <- lapply(yl, scDisperse)
+
+y <- RISC::scMultiIntegrate(objects = yl)
+```
+
+# Re-arrange data to use Seurat objects
+
+We need to accomodate the data to match the standard Seurat objects. We need to be sure that the data of different assays have the same row and column names.
+
+```{r}
+colData <- y@coldata
+rowData <- y@rowdata
+#tmp <- as.matrix(y@assay$count)
+tmp <- as.matrix(y@assay$logcount)
+colnames(tmp) <- colData$scBarcode
+rownames(tmp) <- rowData$Symbol
+
+z <- x[rowData$Symbol, colData$scBarcode] 
+z[["integrated"]] <- Seurat::CreateAssayObject(counts = tmp)
+DefaultAssay(z) <- "integrated"
+z
+```
+# Visualization
+
+Once we get our Seurat object with the corrected assay, we perform PCA and choose the number of dimensions by looking at the elbow plot of the standard deviation of the principal components. On this case we think that 10 dimension would be enough to capture the majority of information from our integrated dataset.
+
+```{r}
+VariableFeatures(z) <- rownames(z)
+z <-  ScaleData(z, verbose = FALSE)
+z <- RunPCA(z, npcs = 20, verbose = FALSE)
+ElbowPlot(z)
+```
+We then run umap using the first 10 dimensions from PCA
+
+```{r}
+z <- RunUMAP(z, reduction = "pca", dims = 1:10)
+```
+# Plots
+
+Finally we can plot our data and color the cells by group and batch to visually verify the mixing among batches.
+
+```{r}
+Seurat::DimPlot(z, group.by = "Group") + Seurat::DimPlot(z, group.by = "Batch")
+Seurat::DimPlot(z, group.by = "Group", reduction = "pca") + Seurat::DimPlot(z, group.by = "Batch", reduction = "pca")
+```
+
+CONCLUSIONS: RISC is difficult to use if we want to interact with other objects (e.g. Seurat objects). The integration looks nice on this scenario, but it is still necessary to asses the integration in more complicated scenarios. The groups from the UMAP plot look a bit deformed (e.g. non-circular) as compared with previous experiences with other batch-effects correction tools.
+
+
+
+
+
