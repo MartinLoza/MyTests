@@ -1,0 +1,163 @@
+---
+title: "Test RISC on real datasets. Pseudo-batches"
+output: html_notebook
+author: "Martin Loza"
+data: "30-03-2021"
+---
+
+On this workflow I will correct batch-effect on the pseudo-batches dataset described in the Canek paper. This test aims to asses the bias introduced by integration tools in the absent of batch-effects.
+
+```{r setup}
+library(Seurat)
+library(RISC)
+library(ggplot2)
+library(splatter)
+library(patchwork)
+library(here)
+library(kBET)
+library(ggrepel)
+
+source(here("ScRNASeq/BatchCorrection/Functions.R"))
+seed = 12
+
+set.seed(seed)
+mytheme <- theme_classic() + theme(text = element_text(size = 20)) 
+theme_set(mytheme)
+testName <- "Pseudo-batches"
+
+options(future.globals.maxSize = 4e10)
+
+knitr::opts_chunk$set(
+	fig.align = "center",
+	fig.height = 5,
+	fig.width = 10
+)
+```
+
+# Load data with Splatter
+
+On this test I will use a pre-processed dataset from a previous workflow from the Canek paper.
+
+```{r}
+Uncorrected <- readRDS(file = here("Data/CanekPaper/Results/Figure3/Uncorrected2.Rds"))
+Uncorrected
+```
+
+# Correct-batch effects 
+
+We use the wrapper function from the Functions.R file
+
+```{r}
+x <- RunRISC(Uncorrected = Uncorrected, batch = "batch")
+x
+```
+# Visualization
+
+Once we get our Seurat objects with the corrected assay, we perform PCA and choose the number of dimensions by looking at the elbow plot of the standard deviation of the principal components. On this case we think that 40 dimensions would be enough to capture the majority of information from our integrated dataset.
+
+```{r}
+set.seed(seed)
+VariableFeatures(x) <- rownames(x)
+x <-  ScaleData(x, verbose = FALSE)
+x <- RunPCA(x, npcs = 50, verbose = FALSE)
+ElbowPlot(x, ndims = 50) 
+```
+We then run umap using the first 40 dimensions from PCA
+
+```{r}
+set.seed(seed)
+x <- RunUMAP(x, reduction = "pca", dims = 1:40, verbose = FALSE)
+```
+# Plots
+
+Finally we can plot our data and color the cells by group and batch to visually verify the mixing among batches. On this case we expect the integration to remain as the uncorrected data, as no batch-effects exists.
+
+```{r, fig.height=10}
+Seurat::DimPlot(x, group.by = "celltype") + Seurat::DimPlot(x, group.by = "cluster") +
+  Seurat::DimPlot(Uncorrected, group.by = "celltype") + Seurat::DimPlot(Uncorrected, group.by = "cluster") 
+```
+# Calculate scores
+
+We use the kBet and Silhouette to asses the bias introduced by integration tools. For comparison, we also assesed previous results from Figure 3 workflow of Canek's paper.
+
+```{r}
+file <- here("Data/CanekPaper/Results/Figure3")
+Canek <- readRDS(file = paste0(file, "/Canek2.Rds"))
+Harmony <- readRDS(file = paste0(file, "/Harmony2.Rds"))
+ComBat <- readRDS(file = paste0(file, "/ComBat2.Rds"))
+
+scoSilhouette <- list()
+scoKbet <- matrix(NA, ncol = 5, nrow = 3)
+colnames(scoKbet) <-  c("Uncorrected", "Canek", "Harmony", "ComBat", "RISC")
+```
+## Silhouette
+
+We assesed the celltype preservations using the silhouette width score. We expect the scores from the integrations to be as close as possible to the ones from the uncorrected data.
+
+```{r}
+set.seed(seed)
+dimPCA <- 40
+
+scoSilhouette[["Uncorrected"]] <- RunSilhouette(object = Uncorrected, batch = "batch", 
+                                                reduction = "pca", nDim = dimPCA)
+scoSilhouette[["Canek"]] <- RunSilhouette(object = Canek, batch = "batch", 
+                                          reduction = "pca", nDim = dimPCA)
+scoSilhouette[["Harmony"]] <- RunSilhouette(object = Harmony, batch = "batch", 
+                                            reduction = "harmony", nDim = ncol(Harmony[["harmony"]]))
+scoSilhouette[["ComBat"]] <- RunSilhouette(object = ComBat, batch = "batch",
+                                           reduction = "pca", nDim = dimPCA)
+scoSilhouette[["RISC"]] <- RunSilhouette(object = x, batch = "batch", 
+                                         reduction = "pca", nDim = dimPCA)
+
+scoSilhouette <- as.data.frame(scoSilhouette)
+scoSilhouette 
+```
+
+## kBET
+
+We used kBET score to asses the mixing between batches. Again, we expect the scores to be as close as the one from the uncorrected data.
+
+```{r}
+set.seed(seed)
+dimPCA <- 40
+per <- c(0.05, 0.15, 0.3)
+
+scoKbet[,"RISC"] <- RunKBET(object = x, reduction = "pca", nDim = dimPCA,
+                            per = per, batch = "batch")
+scoKbet[,"Uncorrected"] <- RunKBET(object = Uncorrected, reduction = "pca", nDim = dimPCA,
+                                   per = per, batch = "batch")
+scoKbet[,"Canek"] <- RunKBET(object = Canek, reduction = "pca", nDim = dimPCA,
+                             per = per, batch = "batch")
+scoKbet[,"Harmony"] <- RunKBET(object = Harmony, reduction = "harmony",
+                               nDim = ncol(Harmony[["harmony"]]),
+                               per = per, batch = "batch")
+scoKbet[,"ComBat"] <- RunKBET(object = ComBat, reduction = "pca", nDim = dimPCA, 
+                              per = per, batch = "batch")
+
+scoKbet
+```
+
+# Plot Scores
+
+Finally, we plot the scores. The gray dashed lines represent the scores from the Uncorrected dataset, which on this case are the gold standard to achieve. We observe that RISC scored well on the celltype preservation (e.g. Silhouette score), but introduced some bias on the mixing of batches, as can be observed from the RISC's kBET score as compared with the dashed line.
+
+```{r}
+scoSilhouette <- scoSilhouette[,colnames(scoKbet)]
+
+df <- data.frame("Silhouette" = t(scoSilhouette), "kBet.Acceptance.Rate" = (1-colMeans(scoKbet)), method = colnames(scoKbet))
+
+pd <- ggplot(df[-1,], aes(Silhouette, kBet.Acceptance.Rate, color = method, label = method)) + 
+  geom_point(size = 7, alpha = 0.5) +
+  geom_text_repel(size = 7, alpha = 1.0, direction = "both", nudge_y = 0 ) +
+  geom_hline(yintercept = df$kBet.Acceptance.Rate[1], linetype = "dashed", alpha = 0.5 ) + 
+  geom_vline(xintercept = df$Silhouette[1], linetype = "dashed", alpha = 0.5) + NoLegend()
+
+pd
+```
+
+CONCLUSIONS: I got the feeling that RISC gives similar as ComBat ones. On the case of kBET and Silhouette scores, it obtained better results than Harmony. But I still have the impression that RISC results greatly depends on the choose of the reference batch. 
+
+
+
+
+
