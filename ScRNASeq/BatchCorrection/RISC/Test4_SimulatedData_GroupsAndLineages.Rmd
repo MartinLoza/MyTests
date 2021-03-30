@@ -1,0 +1,82 @@
+---
+title: "Test RISC on simulations data with groups and lineages"
+output: html_notebook
+author: "Martin Loza"
+data: "30-03-2021"
+---
+
+On this workflow I will correct batch-effect on the Figure 4 dataset described in the Canek paper. This test asses the ability of the the tool to correct-batch effect on multi-datasets integrations with just a few cells shared among batches. 
+
+```{r setup}
+library(Seurat)
+library(RISC)
+library(ggplot2)
+library(splatter)
+library(patchwork)
+library(here)
+
+source(here("ScRNASeq/BatchCorrection/Functions.R"))
+seed = 321
+
+set.seed(seed)
+mytheme <- theme_classic() + theme(text = element_text(size = 20)) 
+theme_set(mytheme)
+testName <- "Pseudo-batches"
+
+options(future.globals.maxSize = 4e10)
+
+knitr::opts_chunk$set(
+	fig.align = "center",
+	fig.height = 5,
+	fig.width = 10
+)
+```
+
+# Load data with Splatter
+
+On this test I will use a pre-processed dataset from the Figure 4 workflow of Canek's paper.
+
+```{r}
+Uncorrected <- readRDS(file = here("Data/CanekPaper/Results/Figure4/Uncorrectedv2.Rds"))
+Uncorrected
+```
+
+# Correct-batch effects 
+
+We use the wrapper function from the Functions.R file
+
+```{r}
+x <- RunRISC(Uncorrected = Uncorrected, batch = "batch")
+x
+```
+# Visualization
+
+Once we get our Seurat objects with the corrected assay, we perform PCA and choose the number of dimensions by looking at the elbow plot of the standard deviation of the principal components. On this case we think that 10 dimensions would be enough to capture the majority of information from our integrated dataset.
+
+```{r}
+set.seed(seed)
+VariableFeatures(x) <- rownames(x)
+x <-  ScaleData(x, verbose = FALSE)
+x <- RunPCA(x, npcs = 50, verbose = FALSE)
+ElbowPlot(x, ndims = 50) 
+```
+We then run umap using the first 10 dimensions from PCA
+
+```{r}
+set.seed(seed)
+x <- RunUMAP(x, reduction = "pca", dims = 1:10, verbose = FALSE)
+```
+# Plots
+
+Finally we can plot our data and color the cells by group and batch to visually verify the mixing among batches.
+
+```{r, fig.height=10}
+Seurat::DimPlot(x, group.by = "celltype") + Seurat::DimPlot(x, group.by = "batch") +
+  Seurat::DimPlot(Uncorrected, group.by = "celltype") + Seurat::DimPlot(Uncorrected, group.by = "batch") + mytheme
+```
+ 
+CONCLUSIONS: On this scenario, RISC was not able to correct the batch-effects, as we can observed by the distance among same cell-types on the UMAP representation. Moreover, as stated on previous tests, RISC seemed to affect the original distribution of the groups, as can be observed by the "deformation "elongated" cells groups after correction.
+
+
+
+.
