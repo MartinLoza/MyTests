@@ -1,0 +1,82 @@
+---
+title: "Test RISC on real datasets. JURKAT AND T293 CELLS"
+output: html_notebook
+author: "Martin Loza"
+data: "30-03-2021"
+---
+
+On this workflow I will correct batch-effect on a real dataset using RISC.
+
+```{r setup}
+library(Seurat)
+library(RISC)
+library(ggplot2)
+library(splatter)
+library(patchwork)
+library(here)
+
+source(here("ScRNASeq/BatchCorrection/Functions.R"))
+seed = 777
+
+set.seed(seed)
+mytheme <- theme_classic() + theme(text = element_text(size = 20)) 
+theme_set(mytheme)
+testName <- "Simulation"
+
+options(future.globals.maxSize = 4e10)
+
+knitr::opts_chunk$set(
+	fig.align = "center",
+	fig.height = 5,
+	fig.width = 10
+)
+```
+
+# Load data with Splatter
+
+On this test I will use a pre-processed dataset from previous test. The previous workflow can be found on the workflows from the Canek paper.
+
+```{r}
+Uncorrected <- readRDS(file = here("Data/CanekPaper/Results/Figure1/Uncorrected.Rds"))
+Uncorrected
+```
+
+# Correct-batch effects 
+
+We use the wrapper function from the Functions.R file
+
+```{r}
+x <- RunRISC(Uncorrected = Uncorrected, batch = "batch")
+x
+```
+# Visualization
+
+Once we get our Seurat objects with the corrected assay, we perform PCA and choose the number of dimensions by looking at the elbow plots of the standard deviation of the principal components. On this case we think that 40 dimension would be enough to capture the majority of information from our integrated dataset.
+
+```{r}
+VariableFeatures(x) <- rownames(x)
+x <-  ScaleData(x, verbose = FALSE)
+x <- RunPCA(x, npcs = 50, verbose = FALSE)
+ElbowPlot(x, ndims = 50) 
+```
+We then run umap using the first 40 dimensions from PCA
+
+```{r}
+x <- RunUMAP(x, reduction = "pca", dims = 1:40, verbose = FALSE)
+```
+# Plots
+
+Finally we can plot our data and color the cells by group and batch to visually verify the mixing among batches.
+
+```{r, fig.height=10}
+Seurat::DimPlot(x, group.by = "celltype") + Seurat::DimPlot(x, group.by = "batch") +
+Seurat::DimPlot(x, group.by = "celltype", reduction = "pca") +
+  Seurat::DimPlot(x, group.by = "batch", reduction = "pca")
+```
+
+CONCLUSIONS: According with my experience using other batch-correction tools, RISC running time is not long. The integration on this case was not sufficient as the batch-effects remain on both 293t and Jurkat cells. One thing that could be affecting the integration is the selection of the reference batch. 
+
+
+
+
+
