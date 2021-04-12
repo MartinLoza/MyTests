@@ -65,13 +65,17 @@ sum(eig1 == eig2[1:length(eig1)])
 sum((eig1 - eig2[1:length(eig1)]) < 1e-3)
 ```
 
-Now we use the getBic function with the eigen values to calculate the BIC. According with this criterion, we will select the number of PCs that corresponds with the minimum BIC value.
+Now we use the getBic function with the eigen values to calculate the BIC. According with this criterion, we will select the number of PCs that corresponds with the minimum BIC value. We can observe that there is a difference if we use the eigen values obtained from the functio prcomp repect with the ones obtained from the covariance matrix. This might be related to the fact that using the prcomp function we obtained only 1349 components, given by the fact that we have larger dimensions than samples. However, both selection of PCs agree, even though they are in a different scale. The results agree with the Elbow Plot.
 
 ```{r}
-BIC <- -BicPCA::getBicPca(eig = eig2, N = ncol(scaledData), K = 20)
-plot(BIC)
+BIC1 <- -BicPCA::getBicPca(eig = eig1, N = ncol(scaledData), K = 20)
+BIC2 <- -BicPCA::getBicPca(eig = eig2, N = ncol(scaledData), K = 20)
+plot(BIC1)
+plot(BIC2)
+ElbowPlot(x)
 selPCA <- which.min(BIC)
 ```
+Finally we can use the selected number of PCs in downstream analysis as visualization. 
 
 ```{r}
 x <- RunUMAP(x, reduction = "pca", dims = 1:selPCA, verbose = FALSE)
