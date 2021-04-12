@@ -10,13 +10,15 @@ vignette: >
 ```{r, include = FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
-  comment = "#>"
+  comment = "#>",
+  fig.width=5, 
+  fig.height=5
 )
 ```
 
 We first load the BicPCA package
 
-```{r setup}
+```{r setup }
 library(BicPCA)
 library(ggplot2)
 library(Seurat)
