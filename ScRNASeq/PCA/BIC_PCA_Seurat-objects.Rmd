@@ -73,8 +73,9 @@ BIC2 <- -BicPCA::getBicPca(eig = eig2, N = ncol(scaledData), K = 20)
 plot(BIC1)
 plot(BIC2)
 ElbowPlot(x)
-selPCA <- which.min(BIC)
+selPCA <- which.min(BIC1)
 ```
+
 Finally we can use the selected number of PCs in downstream analysis as visualization. 
 
 ```{r}
