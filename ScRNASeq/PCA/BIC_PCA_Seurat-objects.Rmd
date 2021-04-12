@@ -1,0 +1,95 @@
+---
+title: "Seurat-objects"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Seurat-objects}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+We first load the BicPCA package
+
+```{r setup}
+library(BicPCA)
+library(ggplot2)
+library(Seurat)
+library(here)
+
+seed = 777
+```
+
+We load stored data from tabula muris
+
+```{r}
+
+load(file = here("Data/Tabula_Muris/facs_Thymus_seurat_tiss.Robj"))
+x <- UpdateSeuratObject(tiss)
+rm(tiss)
+x
+```
+
+# Standard workflow
+
+According with the elbow plot, we would like to use around 20 dimensions, but this is a really subjective way to do it. Minka (2000) provides an alternative way using the Bayesian Information Criterion (BIC) over a probabilistic PCA. We then need to calculate the BIC for a desired set of PCs and define the number of PCs as the one with the minimum BIC score.
+
+```{r}
+x <- NormalizeData(x, verbose = FALSE)
+x <- FindVariableFeatures(x, verbose = FALSE)
+x <- ScaleData(x, verbose = FALSE)
+x <- RunPCA(x, npcs = 70, verbose = FALSE)
+ElbowPlot(x, ndims = 70)
+x
+```
+
+To use the BIC to define the number of PCs we need the standard deviations of the complete PCA's dimensions (e.g., if we use 2000 variable features, we need the 2000 standad deviation of the corresponding PCA).  This is a problem for Seurat objects as it uses the package irlba to compute the PCA and we just btain the s.d. of the selected PCs  
+
+```{r}
+length(x[["pca"]]@stdev)
+```
+
+The good thing is that in order to use the BIC we can provide the eigen values of the covariance matrix of the centered data. The eigen values are comparable on 3 digits. Good enough for our tests
+
+```{r}
+scaledData <- x@assays$RNA@scale.data
+eig1 <- (prcomp(x = t(scaledData), center = FALSE, scale. = FALSE)$sdev)^2
+eig2 <- eigen(cov(t(scaledData)))$values
+
+sum(eig1 == eig2[1:length(eig1)])
+sum((eig1 - eig2[1:length(eig1)]) < 1e-3)
+```
+
+Now we use the getBic function with the eigen values to calculate the BIC. According with this criterion, we will select the number of PCs that corresponds with the minimum BIC value.
+
+```{r}
+BIC <- -BicPCA::getBicPca(eig = eig2, N = ncol(scaledData), K = 20)
+plot(BIC)
+selPCA <- which.min(BIC)
+```
+
+```{r}
+x <- RunUMAP(x, reduction = "pca", dims = 1:selPCA, verbose = FALSE)
+```
+
+```{r}
+DimPlot(x, group.by = "cell_ontology_class")
+ElbowPlot(x)
+```
+
+
+
+
+
+
+
+
+
+
+
+
