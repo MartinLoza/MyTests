@@ -1,0 +1,80 @@
+---
+title: "Define the number of PCs to use using a function"
+author: "Martin Loza
+date: "13/04/2021"
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width=5, 
+  fig.height=5
+)
+```
+
+We first load the BicPCA and other packages
+
+```{r setup}
+library(BicPCA)
+library(ggplot2)
+library(Seurat)
+library(here)
+
+source(here("Functions.r"))
+
+seed = 777
+```
+
+We load a datasat from tabula muris
+
+```{r}
+load(file = here("Data/Tabula_Muris/facs_Thymus_seurat_tiss.Robj"))
+x <- UpdateSeuratObject(tiss)
+rm(tiss)
+x
+```
+# Standard way to define the number of PCs
+
+According with the elbow plot, we would like to use around 20 dimensions, but this is a really subjective way to do it. Minka (2000) provides an alternative way using the Bayesian Information Criterion (BIC) over a probabilistic PCA. We then need to calculate the BIC for a desired set of PCs and define the number of PCs as the one with the minimum BIC score.
+
+```{r}
+x <- NormalizeData(x, verbose = FALSE)
+x <- FindVariableFeatures(x, verbose = FALSE)
+x <- ScaleData(x, verbose = FALSE)
+x <- RunPCA(x, npcs = 70, verbose = FALSE)
+ElbowPlot(x, ndims = 70)
+x
+```
+# Define the number of PCs using the BIC
+
+We now define the number of PCs to use. If we set returnBIC = TRUE, we get all the BIC for each tested dimension. Plotting the BIC could be useful for debbuging.    
+
+```{r} 
+bicPCA <- FindNumberPC(x, dim2Test = 100, returnBIC = TRUE)
+selPCA <- bicPCA$selPCA
+plot(bicPCA$BIC[1:30])
+print(paste0("Selected PCs: ", selPCA))
+```
+We can use the selected number of PCs in downstream analysis as visualization. 
+
+```{r}
+x <- RunUMAP(x, reduction = "pca", dims = 1:selPCA, verbose = FALSE)
+```
+
+```{r}
+DimPlot(x, group.by = "cell_ontology_class", label = TRUE, label.size = 5) + NoLegend()
+ElbowPlot(x)
+```
+
+
+
+
+
+
+
+
+
+
+
+
