@@ -5,22 +5,31 @@ FindNumberPC <- function(object = NULL, dim2Test = NULL, returnBIC = FALSE){
 
 
 
-FindNumberPC.Seurat <- function(object = NULL, dim2Test = NULL, returnBIC = FALSE){
+FindNumberPC.Seurat <- function(object = NULL, dim2Test = NULL, returnBIC = FALSE, ...){
   
-  if("pca" %in% names(object@reductions)){
-    
-    # Check that the calculated PCA contains all of the eigen values of the covariance matrix
-    if(length(object[["pca"]]@stdev) != min(length(VariableFeatures(object)), nrow(object[["pca"]]))){
-      scaData <- x@assays$RNA@scale.data
-    }else{
-      eigVal <- (x[["pca"]]@stdev)^2
-    }
-  }else{
-    scaData <- scale(t(GetAssayData(object, assay = "RNA", slot = "data")), center = TRUE, scale = TRUE)
-  }
+  features <- VariableFeatures(object)
+  
+  # We use the Seurat scaling to get comparable results. If we manually scale the data we could get similar but different results.
+  scaData <- t(object[["RNA"]]@scale.data)
+  
+  if(length(scaData) == 0)
+    stop("The Seurat object must be scaled.")
+  
+  # if("pca" %in% names(object@reductions)){
+  #   
+  #   # Check that the calculated PCA contains all of the eigen values of the covariance matrix
+  #   if(length(object[["pca"]]@stdev) != min(length(features), nrow(object[["pca"]]))){
+  #     scaData <- t(object@assays$RNA@scale.data)
+  #   }else{
+  #     eigVal <- (object[["pca"]]@stdev)^2
+  #   }
+  # }else{
+  #   
+  #   scaData <- scale(t(as.matrix(GetAssayData(object, assay = "RNA", slot = "data")[features,])), center = TRUE, scale = TRUE)
+  # }
   
   if(!exists("eigVal"))
-    eigVal <- eigen(cov(t(scaData)))$values
+    eigVal <- eigen(cov(scaData))$values
   
   if(is.null(dim2Test))
     dim2Test <- min(dim(scaData))
