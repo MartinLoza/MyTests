@@ -56,6 +56,26 @@ selPCA <- bicPCA$selPCA
 plot(bicPCA$BIC[1:30])
 print(paste0("Selected PCs: ", selPCA))
 ```
+I will compare now with a non preproccesed data. We apply the typicall workflow for Seurat objects. If we don't 
+scale the data we will get a stop message. 
+
+```{r} 
+y <- CreateSeuratObject(GetAssayData(x, assay = "RNA", slot = "counts"))
+y <- NormalizeData(y, verbose = FALSE)
+y <- FindVariableFeatures(y, verbose = FALSE)
+
+bicPCA <- FindNumberPC(y, dim2Test = 100, returnBIC = TRUE)
+```
+
+
+```{r}
+y <- ScaleData(y, verbose = FALSE)
+
+bicPCA <- FindNumberPC(y, dim2Test = 100, returnBIC = TRUE)
+selPCA <- bicPCA$selPCA
+plot(bicPCA$BIC[1:30])
+print(paste0("Selected PCs: ", selPCA))
+```
 We can use the selected number of PCs in downstream analysis as visualization. 
 
 ```{r}
@@ -66,6 +86,10 @@ x <- RunUMAP(x, reduction = "pca", dims = 1:selPCA, verbose = FALSE)
 DimPlot(x, group.by = "cell_ontology_class", label = TRUE, label.size = 5) + NoLegend()
 ElbowPlot(x)
 ```
+
+CONCLUSIONs: 
+ - The function is working good with seurat objects.
+ - The results are comparable if we use Seurat pre-processing steps.
 
 
 
