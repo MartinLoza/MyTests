@@ -1,0 +1,79 @@
+---
+title: "Test scale data"
+author: "Martin Loza
+date: "13/04/2021"
+---
+
+GOAL: I want to manually obtain the same results as compare with Seurat's scaling if I do it manually
+
+We first load the BicPCA and other packages
+
+```{r setup}
+library(BicPCA)
+library(ggplot2)
+library(Seurat)
+library(here)
+
+source(here("Functions.r"))
+
+seed = 777
+set.seed(seed)
+```
+
+We load a datasat from tabula muris
+
+```{r}
+load(file = here("Data/Tabula_Muris/facs_Thymus_seurat_tiss.Robj"))
+x <- UpdateSeuratObject(tiss)
+rm(tiss)
+x
+```
+We first calculate the typical workflow with Seurat objects
+
+```{r}
+x <- NormalizeData(x, verbose = FALSE)
+x <- FindVariableFeatures(x, verbose = FALSE)
+x <- ScaleData(x, verbose = FALSE)
+
+scaDataSeu <- x@assays$RNA@scale.data
+```
+
+Now we scale the data ussing the normalized data over the variable features
+
+```{r}
+features <- VariableFeatures(x)
+scaDataMan <- as.matrix(GetAssayData(x, assay = "RNA", slot = "data")[features,])
+
+scaDataMan <- t(scale(t(scaDataMan), center = TRUE, scale = TRUE))
+```
+
+We compare the two scalings. We first re-check that we are using the same variable features on both scalings. After comparing, we don't obtained the sames values...
+
+```{r}
+scaDataMan <- scaDataMan[rownames(scaDataSeu),]
+sum(rownames(scaDataMan) %in% rownames(scaDataSeu)) == length(features)
+
+expected <- length(scaDataSeu)
+
+sum(scaDataMan == scaDataSeu)
+sum(scaDataMan == scaDataSeu) == expected
+sum(abs(scaDataMan - scaDataSeu) < 1e-1)
+sum(abs(scaDataMan - scaDataSeu) < 1e-1) == expected
+```
+```{r}
+scaDataMan <- as.matrix(GetAssayData(x, assay = "RNA", slot = "data")[rownames(scaDataSeu),])
+scaDataMan <- t(scale(t(scaDataMan), center = TRUE, scale = TRUE))
+```
+
+CONCLUSIONS: We need to search more about the way that Seurat is scaling the data...
+
+
+
+
+
+
+
+
+
+
+
