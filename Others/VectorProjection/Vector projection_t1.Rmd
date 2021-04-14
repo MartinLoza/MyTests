@@ -1,0 +1,54 @@
+---
+title: "Vector projection"
+author: "Martin Loza"
+---
+
+On this test I will project a vector into another. This can be useful to state points' relations. For example, on single-cell data we could use this projections to state relationships among cells.
+
+```{r}
+library(plotly)
+```
+
+First we create two random vectors
+
+```{r}
+set.seed(777)
+v1 <- sample(1:10, size = 2)
+v2 <- sample(1:10, size = 2)
+
+lines <- matrix(c(0,0,v1, v2),nrow = 3, byrow = TRUE)
+
+plot(x = lines[,1], y = lines[,2], asp = 1)
+arrows(x0 = lines[1,1], y0 = lines[1,2], x1 = lines[2:3,1], y1 = lines[2:3,2], length = 0.2, col = c(1,3))
+```
+Suppose we want to know the projection of v1 (black vector) into v2 (green vector). Following the wikipedia formula (https://en.wikipedia.org/wiki/Vector_projection), we first would like to obtain the unit vector of v2 (uV2). If we multiply v1 by uV2 we obtain the "scalar" (distance of the projection). Multiplying the scalar by the uV2 we obtain the projection of our vector. 
+
+```{r}
+nV2 <- norm(v2, type = "2")
+uV2 <- v2/nV2
+scalar <- v1 %*% uV2
+pV1_2 <- scalar*uV2
+```
+
+Plotting the projected vector
+
+```{r}
+lines <- matrix(c(0,0,v1, v2, pV1_2), nrow = 4, byrow = TRUE)
+
+plot(x = lines[,1], y = lines[,2], asp = 1)
+arrows(x0 = lines[1,1], y0 = lines[1,2], x1 = lines[2:4,1], y1 = lines[2:4,2], length = 0.2, col = c(1,3,1))
+```
+
+
+
+
+
+
+
+
+
+```{r}
+rmd2jupyter::rmd2jupyter(x = "Vector projection_t1.Rmd")
+```
+
+
