@@ -1,0 +1,222 @@
+---
+title: "Linear discriminant analysis for one predictor and two classes"
+output: html_notebook
+    
+---
+
+GOAL: I am interested in observing the linear properties of the linear discriminant predictor
+NOTES: Because I am only interest on some properties of this method, I used the means and standad deviations used to obtain the samples from each class. If we didn't know this values, we would calculate them using the maximum likelihood approach.  
+
+```{r setup}
+library(ggplot2)
+library(tidyverse)
+
+
+myTheme <- theme_classic() 
+theme_set(myTheme)
+
+seed = 777
+set.seed(seed)
+
+plotHist <- function(object, mus, bins = 30){
+  df <- data.frame(mu = mus, class = unique(object$class))
+  
+  ggplot(object, aes(x = value, fill = class, color = class)) + 
+    geom_histogram(alpha = 0.5, bins = bins) +
+    geom_vline(data = df, aes(xintercept = mu, color = class),
+               linetype = "dotdash", size =1)
+}
+
+simDataLDA <- function(nSamples = c(50,50), m = c(-4,4), sds = c(1,1)){
+
+  pis <- nSamples
+  nGroups = length(m)
+  
+  values <- NULL
+  classes <- NULL
+  #Sample the observations
+  for(i in 1:nGroups){
+    values <- c(values, rnorm(n = nSamples[i], mean = m[i], sd = sds[i]))
+    classes <- c(classes, paste0("C",rep(i, nSamples[i])))
+  }
+  
+  df <- data.frame(value = values, class = classes)
+  
+  dfLines <- data.frame(slope = rep(NA, nGroups), intercept = rep(NA,nGroups), class = paste0("C",1:nGroups))
+  # Obtain the slopes and probabilities for each point from each class
+  for(i in 1:nGroups){
+    slope = m[i]/sds[i]^2
+    intercept = -0.5*(m[i]^2/sds[i]^2) + log(pis[i])
+    
+    df[[paste0("log.prob.C",i)]] <- df$value*slope + intercept
+    dfLines[i,c("slope", "intercept")] <- c(slope, intercept)
+    
+  }
+  return(list(samples = df,lines = dfLines))
+}
+
+
+plotHist2 <- function(object = NULL, mus = NULL, bins = 30){
+
+nGroups <- length(unique(object$samples$class))
+
+  df <- data.frame(mu = mus, class = unique(object$samples$class))
+  
+  p <- ggplot(object$samples, aes(x = value, fill = class, color = class)) + 
+    geom_histogram(alpha = 0.5, bins = bins, position = "identity") +
+    geom_vline(data = df, aes(xintercept = mu, color = class),
+               linetype = "dotdash", size =1)
+  
+  for(i in 1:nGroups){
+    colName <- paste0("log.prob.C",i) 
+    p <- p + 
+      geom_abline(data = object$lines,
+              aes(intercept = intercept, slope = slope, color = class),
+              size = 1.0, alpha = 0.5)
+  }
+  
+  return(p)
+}
+
+getDB <- function(m = NULL){
+  
+  db <- rep(0, length(m)-1)
+  for(i in 1:length(db)){
+    db[i] <- (m[i] + m[i+1])/2
+  }
+  
+  return(db)
+}
+```
+
+
+# Simulate data
+First we simulate data from two separated classes $C_1$ and $C_2$. To ease this analysis we get the same number of samples from each class (e.g. $\pi_1 = \pi_2$) from two normal distribution with the same standard deviations (e.g. $\sigma_1 = \sigma_2$). 
+
+```{r}
+nSamples <- 50
+sd = 1
+mus <- c(-4, 4)
+pis = nSamples
+
+samC1 <- rnorm(n = nSamples, mean = mus[1], sd = sd)
+samC2 <- rnorm(n = nSamples, mean = mus[2], sd = sd)
+
+samples <- data.frame(value = c(samC1, samC2), 
+                      class = c(rep("C1",length(samC1)), rep("C2", length(samC2))))
+
+samples
+```
+
+If we plot the histogram of the samples we can visually identify the two classes
+
+```{r}
+plotHist(samples, mus)
+```
+The linear discriminant analysis tells us that under this conditions we will the test's samples will be assigned to the class that maximizes the linear equality $\delta_k(x) = x\frac{\mu_k}{\sigma^2} - \frac{\mu_k^2}{2\sigma^2}+log(\pi_k)$ where $k$ refers to the classes we are analyzing (e.g. $k = 1$ refers to the class one $C_1$). This linear equation comes from the *log* of the Bayes' theorem for this problem under a Gaussian model. Then, we would like to visualize this linear dynamic of the two classes, and their relation with the decision boundary. We then plot this two lines using the parameters used to obtain the samples. This lines can be interpret as the probability of a sample to belong to each class (in reality it would be log probability but for it doesn't matter for now)
+
+```{r fig.width=5, fig.width=5}
+sC1 <- mus[1]/sd^2
+sC2 <- mus[2]/sd^2
+
+intC1 <- -0.5*(mus[1]^2/sd^2) + log(pis)
+intC2 <- -0.5*(mus[2]^2/sd^2) + log(pis)
+
+dfLines <- data.frame(intercept = c(intC1,intC2), slope = c(sC1, sC2), class = unique(samples$class))
+
+plotHist(samples, mus) + 
+  geom_abline(data = dfLines,
+              aes(intercept = intercept, slope = slope, color = class),
+              size = 1.0, alpha = 0.5) 
+```
+In the previous plot, the lines are difficult to observe using the same scale as the histogram. We will the re-scale the y axis and plot the probability of one of the samples to belong to either class one or class 2. Because we will assign the point to the class with the maximum probability, this point will be assigned to class *C1*
+which is acctually the class from which this dot were sampled.
+
+```{r}
+# Calculate the probabilities of each point for the classes
+samples <- samples %>% mutate(log.prob.C1 = value*sC1 + intC1, log.prob.C2 = value*sC2 + intC2 ) 
+
+point <- sample(1:nrow(samples), 1)
+
+plotHist(samples, mus) + 
+  geom_point(data = samples[point,], aes(x = value, y = log.prob.C1), size = 4) + 
+  geom_point(data = samples[point,], aes(x = value, y = log.prob.C2), size = 4) + 
+  geom_abline(data = dfLines,
+              aes(intercept = intercept, slope = slope, color = class),
+              size = 1.0, alpha = 0.5) + ylim(-25,25) 
+  
+```
+
+We can then analyse each of the dots in the same way and draw the decision boundary in the intersection of the two probability lines. On this example we we could correctly assign each of the observations to their class. But what would happen in the case when the two groups are closer?
+
+```{r}
+plotHist(samples, mus) + 
+  geom_point(data = samples, aes(x = value, y = log.prob.C1)) + 
+  geom_point(data = samples, aes(x = value, y = log.prob.C2)) + 
+  geom_abline(data = dfLines,
+              aes(intercept = intercept, slope = slope, color = class),
+              size = 1.0, alpha = 0.5) + ylim(-25,25) + 
+  geom_vline(xintercept = (mus[1] + mus[2])/2, linetype = "dashed", color = "darkorchid2", size = 1.1)
+```
+
+Let's use the function simDataLDA defined in the setup chunk of this workflow, to simulate two closer groups.
+
+```{r}
+mus <- c(1,-1)
+dataLDA <- simDataLDA(m = mus)
+plotHist(dataLDA$samples, mus = mus)
+```
+
+Now we plot the probabilites and the decision boundary as before. This time there are some points that are incorrectly assigned to a different class. 
+
+```{r}
+plotHist(dataLDA$samples, mus = mus) +
+  geom_point(data = dataLDA$samples, aes(x = value, y = log.prob.C1)) + 
+  geom_point(data = dataLDA$samples, aes(x = value, y = log.prob.C2)) + 
+  geom_abline(data = dataLDA$lines,
+              aes(intercept = intercept, slope = slope, color = class),
+              size = 1.0, alpha = 0.5) +  
+  geom_vline(xintercept = (mus[1] + mus[2])/2, linetype = "dashed", color = "darkorchid2", size = 1.1)
+```
+What about 3 classes? For this we will use the plotHist2 function defined at the setup chunk of this workflow. We can observe that now there are 3 lines. The decision boundaries would be defined by the intersection of the lines.
+
+```{r}
+mus <- c(-4, 0, 4)
+sds <- c(1,1,1)
+nSamples <- c(50,50,50)
+data <- simDataLDA( nSamples = nSamples, m = mus, sds = sds)
+
+db <- getDB(m = mus)
+
+plotHist2(object = data, mus = mus) + ylim(0, 25) + 
+  geom_vline(xintercept = db, linetype = "dashed", color = "darkorchid2", size = 1.5)
+```
+What about 5 classes?
+
+```{r}
+mus <- c(-20, -10 ,0, 10, 20)
+sds <- c(1,1,1,1,1)
+nSamples <- c(50,50,50,50,50)
+data <- simDataLDA( nSamples = nSamples, m = mus, sds = sds)
+
+db <- getDB(m = mus)
+
+plotHist2(object = data, mus = mus) + ylim(0, 25) + 
+  geom_vline(xintercept = db, linetype = "dashed", color = "darkorchid2", size = 1.5) + ylim(0,150)
+```
+
+
+CONCLUSIONS: We could observe the linearity of the log probabilities and their interaction with the decision boundary.
+
+
+
+
+
+
+
+
+
+
+
+
+
