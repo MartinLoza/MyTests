@@ -1,0 +1,124 @@
+---
+title: "Batch correcion using Canek with Bioconductor"
+author: "Martin Loza"
+date: "03/06/2021"
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.align = "center",
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+On this test I will implement Canek using Bioconductor objects
+
+```{r setup}
+library(Canek)
+library(SingleCellExperiment)
+library(scran)
+library(scater)
+library(BiocSingular)
+library(irlba)
+
+theme_set(theme_classic())
+
+# Functions
+getPCA <- function(sce.object = NULL, n = 3, assay = "logcounts"){
+  pca <- assays(sce.object)[[assay]]
+  pca <- prcomp_irlba(t(pca), n = n ,center = TRUE, scale. = TRUE)
+  reducedDims(sce.object) <- list(PCA = pca$x)
+  return(sce.object)
+}
+
+plotPCA <- function(x, tag = "batch"){
+  tag <- x[[tag]]
+  pca <- data.frame(reducedDim(x, "PCA"))
+  pca$tag <- tag
+  
+  ggplot(pca, aes(x = PC1, y = PC2, color = tag)) + geom_point()
+}
+```
+
+# Load data
+
+```{r}
+simData <- Canek::SimBatches
+counts <- cbind(simData$batches$B1, simData$batches$B2)
+batch <- c(rep("B1", ncol(simData$batches$B1)), rep("B2", ncol(simData$batches$B2)))
+x <- SingleCellExperiment(assays = list(counts = counts),
+                          colData = data.frame(batch = batch, celltype = simData$cell_types))
+
+x
+```
+
+```{r}
+table(x$batch)
+```
+
+# Pre-processing
+
+## Normalization
+
+```{r}
+x <- computeSumFactors(x)
+x <- logNormCounts(x)
+x
+```
+
+## Variance modelling
+
+```{r}
+dec <- modelGeneVar(x)
+top <- getTopHVGs(dec, n=100)
+```
+
+### Visualizing the fit
+
+```{r}
+# fit <- metadata(dec)
+# plot(fit$mean, fit$var, xlab="Mean of log-expression",
+#     ylab="Variance of log-expression")
+# curve(fit$trend(x), col="dodgerblue", add=TRUE, lwd=2)
+```
+
+# PCA
+
+```{r}
+x <- getPCA(x, n = 3)
+x
+```
+
+```{r}
+plotPCA(x, tag = "batch") + ggtitle("Batch")
+plotPCA(x, tag = "celltype") + ggtitle("Celltype")
+```
+
+# Batch effect correction with Canek
+
+```{r}
+x <- RunCanek(x, batches = "orig.ident",  assay = "logcounts", features = features)
+```
+
+# PCA
+
+```{r}
+x <- getPCA(x, n = 3,  assay = "Canek")
+x
+```
+
+```{r}
+plotPCA(x, tag = "orig.ident") + ggtitle("Batch")
+plotPCA(x, tag = "cell_type") + ggtitle("Celltype")
+```
+CONCLUSIONS:
+The integration is unsuccessful, there is a big difference between Canek's correction using a Seurat or a SingleCellExperiment object. I think is related with the selected features to use in the integration, but I need to recheck and debug. 
+
+
+
+
+
+
+
