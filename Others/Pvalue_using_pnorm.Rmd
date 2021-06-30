@@ -1,0 +1,86 @@
+---
+title: "Calculating p-values for normally distributed data"
+date: "30/06/2021"
+output: html_notebook
+---
+
+## GetPValue function
+
+```{r}
+GetPValue <- function(q = NULL, mean = 0, sd = 1){
+  if(sample <= mean){
+    lt <- TRUE
+  }else{
+    lt <- FALSE
+  }
+  
+  return(2*pnorm(q = sample, mean = mean, sd = sd, lower.tail = lt))
+}
+```
+
+
+Suppose we have samples from a normal distribution with mean 5 and standard deviation 1. I would like to calculate a p-value for a given sample using the `pnorm` function.
+
+## Test 1. Sample = mean
+
+```{r}
+mean = 5
+sd = 1
+sample = mean
+
+pnorm(q = sample, mean = mean, sd = sd, lower.tail = FALSE)
+pnorm(q = sample, mean = mean, sd = sd, lower.tail = TRUE)
+```
+p-value refers to the probability of observing the sampled value, similar, and rarer outcomes. Because my sample is exactly at the mean, I would expect the p-value to be 1, but the functon `pnorm` returned 0.5. This is because, if `lower.tail = FALSE`, this function returns the integral from my sampled valued to infinite. On the other hand, if `lower.tail = TRUE`, the function returns the integral from -Inf to the sampled value.
+
+We can test these properties by setting the sampled value different from the mean.  
+
+```{r}
+sample = mean - 0.5
+
+pnorm(q = sample, mean = mean, sd = sd, lower.tail = FALSE)
+pnorm(q = sample, mean = mean, sd = sd, lower.tail = TRUE)
+```
+
+To calculate the p-value, we first need to decide whether we need `lower.tail` to `FALSE` or `TRUE` depending if the sampled values is lower or higher than the mean. Then, we multiply the result by two to obtain the probability from the counterpart of the distribution. This is automatically calculated by the wrapper function `GetPValue`. 
+
+```{r}
+sample = mean 
+GetPValue(q = sample, mean = mean, sd = sd)
+```
+
+## Test 2. Sampled value close to the mean
+
+We can observe that for equally distanced from the mean samples, the function `GetPValue` returns equal p-values, as expected. 
+
+```{r}
+sample = mean - 0.1
+GetPValue(q = sample, mean = mean, sd = sd)
+```
+
+```{r}
+sample = mean + 0.1
+GetPValue(q = sample, mean = mean, sd = sd)
+```
+## Test 3. Sampled value far from the mean
+
+```{r}
+sample = mean - 5
+GetPValue(q = sample, mean = mean, sd = sd)
+```
+
+```{r}
+sample = mean + 5
+GetPValue(q = sample, mean = mean, sd = sd)
+```
+
+### Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
