@@ -8,13 +8,13 @@ output: html_notebook
 
 ```{r}
 GetPValue <- function(q = NULL, mean = 0, sd = 1){
-  if(sample <= mean){
+  if(q <= mean){
     lt <- TRUE
   }else{
     lt <- FALSE
   }
   
-  return(2*pnorm(q = sample, mean = mean, sd = sd, lower.tail = lt))
+  return(2*pnorm(q = q, mean = mean, sd = sd, lower.tail = lt))
 }
 ```
 
