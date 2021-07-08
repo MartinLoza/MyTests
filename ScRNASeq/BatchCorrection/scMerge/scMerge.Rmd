@@ -1,0 +1,227 @@
+---
+title: "Using scMerge with Seurat objects"
+author: "Martin Loza"
+---
+
+In this test I will use scMerge with Seurat objects and compare different parameters selection. 
+
+```{r setup}
+library(here)
+library(Seurat)
+library(scMerge)
+library(ggplot2)
+
+options(future.globals.maxSize = 4e10)
+
+seed = 321
+
+# Functions
+SeuratPreprocessing <- function(object = NULL,...){
+  object <- NormalizeData(object, ...)
+  object <- FindVariableFeatures(object, ...)
+  
+  return(object)
+}
+
+GetPCA <- function(object = NULL, npcs = 10, ...){
+  object <- ScaleData(object, ...)
+  object <- RunPCA(object, npcs = npcs, ...)
+  
+  return(object)
+}
+```
+
+## Load data and Create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. 
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+x <- SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+x <- GetPCA(x, npcs = 30, verbose = FALSE)
+DimPlot(x, group.by = "celltype")
+ElbowPlot(x)
+dimPCA <- 5
+```
+
+## Using scMerge with Seurat objects
+
+scMerge works with bioconductor, so I need to convert the Seurat object. I used the found variable features to standardize the genes of the assays.
+
+```{r}
+features <- VariableFeatures(x)
+sceObject <- Seurat::as.SingleCellExperiment(x[features,])
+sceObject
+```
+
+Also I need to define negative controls, which I think they could be the variable features from the seurat object. I would like to compare the correction using the variable features and the negative controls found by the function `scSEGIndex`. For this coparison test I will use the k's for each batch (e.g. the number of known clusters per batch) as 1, just for comparison.
+
+```{r}
+data <- SummarizedExperiment::assay(sceObject, 'logcounts')
+seg = scMerge::scSEGIndex(exprs_mat = data)
+k = c(1,1,1)
+group <- "batch"
+assayName <- "scMerge"
+
+tFea <- scMerge::scMerge(sce_combine = sceObject, ctl = features, 
+                            assay_name = assayName, kmeansK = k,
+                            batch_name = group, plot_igraph = FALSE,
+                            verbose = FALSE)
+
+tSEG <- scMerge::scMerge(sce_combine = sceObject, ctl = rownames(seg), 
+                            assay_name = assayName, kmeansK = k,
+                            batch_name = group, plot_igraph = FALSE,
+                            verbose = FALSE)
+
+xFea <- CreateSeuratObject(counts = as.matrix(SummarizedExperiment::assay(tFea, "scMerge")),
+                           assay = "integrated",
+                           meta.data = x[[]])
+xSEG <- CreateSeuratObject(counts = as.matrix(SummarizedExperiment::assay(tSEG, "scMerge")),
+                           assay = "integrated",
+                           meta.data = x[[]])
+
+VariableFeatures(xFea) <- features
+VariableFeatures(xSEG) <- rownames(seg)
+
+xFea <- GetPCA(object = xFea, npcs = 10, assay ="integrated", verbose = FALSE)
+xSEG <- GetPCA(object = xSEG, npcs = 10, assay ="integrated", verbose = FALSE)
+
+xFea <- RunUMAP(xFea, dims = 1:10, verbose = FALSE)
+xSEG <- RunUMAP(xSEG, dims = 1:10, verbose = FALSE)
+```
+
+We can observe that, even though the correction is not succesful, probably because of the ks selected, the selection of negative controls doesn't look to have a high impact on the results.
+
+```{r}
+DimPlot(xFea, group.by = "batch")
+DimPlot(xSEG, group.by = "batch")
+```
+
+Now I will perform the same test using k as [1,1,2], which corresponds to the number of known celltypes on each dataset.
+
+```{r}
+k = c(1,1,2)
+group <- "batch"
+assayName <- "scMerge"
+
+tFea <- scMerge::scMerge(sce_combine = sceObject, ctl = features, 
+                            assay_name = assayName, kmeansK = k,
+                            batch_name = group, plot_igraph = FALSE,
+                            verbose = FALSE)
+
+tSEG <- scMerge::scMerge(sce_combine = sceObject, ctl = rownames(seg), 
+                            assay_name = assayName, kmeansK = k,
+                            batch_name = group, plot_igraph = FALSE,
+                            verbose = FALSE)
+
+xFea <- CreateSeuratObject(counts = as.matrix(SummarizedExperiment::assay(tFea, "scMerge")),
+                           assay = "integrated",
+                           meta.data = x[[]])
+xSEG <- CreateSeuratObject(counts = as.matrix(SummarizedExperiment::assay(tSEG, "scMerge")),
+                           assay = "integrated",
+                           meta.data = x[[]])
+
+VariableFeatures(xFea) <- features
+VariableFeatures(xSEG) <- rownames(seg)
+
+xFea <- GetPCA(object = xFea, npcs = 10, assay ="integrated", verbose = FALSE)
+xSEG <- GetPCA(object = xSEG, npcs = 10, assay ="integrated", verbose = FALSE)
+
+xFea <- RunUMAP(xFea, dims = 1:10, verbose = FALSE)
+xSEG <- RunUMAP(xSEG, dims = 1:10, verbose = FALSE)
+```
+
+The corrections look good now. Maybe the correction using the SEG the clusters looks tighter. I would prefer the correction using the variable features, but it is just my personal and subjective opinion.
+
+```{r}
+DimPlot(xFea, group.by = "batch") + ggtitle("Features")
+DimPlot(xSEG, group.by = "batch") + ggtitle("SEG")
+```
+
+## Wrapper function
+
+```{r}
+RunScMerge <- function(seuratObject = NULL, group = "batch", assayName = "integrated", k = NULL, runningTime = FALSE){
+  
+  md <- seuratObject[[]]
+  features <- VariableFeatures(seuratObject)
+  
+  if(length(features) == 0)
+    stop('No variable features found. Run Seurat::FindVariableFeatures and try again.')
+  
+  object <- Seurat::as.SingleCellExperiment(seuratObject[features,])
+  
+  if(is.null(k)){
+    k <- rep(5, length(unique(md[[batch]])))
+  }
+  
+  time <- system.time({
+    object <- scMerge::scMerge(sce_combine = object,
+                               ctl = features,
+                               assay_name = assayName,
+                               kmeansK = k,
+                               batch_name = group,
+                               plot_igraph = FALSE,
+                               verbose = FALSE)
+  })
+  
+  #Create Seurat object
+  object <- CreateSeuratObject(counts = as.matrix(SummarizedExperiment::assay(object, assayName)),
+                               assay = assayName,
+                               meta.data = seuratObject[[]])
+  
+  VariableFeatures(object) <- features
+  
+  if(runningTime == FALSE)
+    return(object)
+  else
+    return(list(scMerge = object, time = time))
+}
+```
+
+Now we can use the wrapper function directly with a Seurat object.
+
+```{r}
+x <- RunScMerge(seuratObject = x, group = "batch", k = c(1,1,2))
+x <- GetPCA(x, npcs = dimPCA, assay ="integrated", verbose = FALSE)
+x <- RunUMAP(x, dims = 1:dimPCA, verbose = FALSE)
+```
+
+```{r}
+DimPlot(x, group.by = "batch")
+```
+CONCLUSIONS:
+The effect of using SGE or features does not have a high impact on the results. However, we MUST select the appropiate k's for the internal k-means when using scMerge. This is the main drawback of this method. The results are highly affected by the selection of these k's, which in most cases are un-known.
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
