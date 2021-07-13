@@ -1,0 +1,145 @@
+---
+title: "Wrapper for Liger"
+author: "Martin Loza"
+---
+
+On this workflow I will test the Liger method to correct batch-effects. My final goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(rliger)
+library(Seurat)
+library(SeuratWrappers)
+library(ggplot2)
+library(RNAseqAnalysis)
+
+dimPCA <- 5
+seed = 777
+sample = TRUE
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiment.
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+
+if(sample)
+  x <- RNAseqAnalysis::SampleData(object = x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+set.seed(seed)
+x <- GetPCA(object = x, dims = 30)
+DimPlot(x, group.by = "celltype")
+ElbowPlot(x)
+```
+## Liger on Seurat objects 
+
+`SeuratWrappers` already implements functions to use Liger on Seurat objects. I will make use of these functions to create my wrapper. [Liger](http://htmlpreview.github.io/?https://github.com/welch-lab/liger/blob/master/vignettes/Integrating_multi_scRNA_data.html) scales the data but do not center it. They also recommend to define the number of factor `k` in the range of 20-40, and the regularization parameter `lambda` as the default value 5. I will use `k = 30` (e.g. the mean value in the recommended range) and the default `lambda = 5`.
+
+```{r}
+set.seed(seed)
+object <- x[VariableFeatures(x),]
+object <- Seurat::ScaleData(object, split.by = "batch", do.center = FALSE, verbose = FALSE)
+object <- SeuratWrappers::RunOptimizeALS(object,  k = 30, lambda = 5, split.by = "batch")
+object <- SeuratWrappers::RunQuantileNorm(object, split.by = "batch")
+```
+
+Liger returns a low-dimensional representation of the data named `iNMF`. These reduction can be use in downstream analyses. To ease interpretation I will rename these reduction to `Liger`
+
+```{r}
+set.seed(seed)
+object[["Liger"]] <- object[["iNMF"]]
+dimLiger <- ncol(object[["Liger"]])
+object <- GetUMAP(object = object, reduction = "Liger", dims = dimLiger, PCA = FALSE, scale = FALSE)
+DimPlot(object, group.by = "celltype")
+```
+## Wrapper function
+
+```{r}
+RunLiger <- function(object = NULL, batch = "batch", k = 30, runningTime = FALSE, verbose = FALSE, ...){
+  
+  features <- Seurat::VariableFeatures(object)
+  
+  if(length(features) == 0){
+    warning("Variable features not defined. Running 'FindVariableFeatures' function.", call. = TRUE)
+    features <- Seurat::VariableFeatures(Seurat::FindVariableFeatures(object, verbose = verbose))
+  }
+  
+  if(!(batch %in% colnames(object[[]])))
+    stop(paste0(batch, "not found in object's metadata. Check the batch labels."))
+  
+  tmp <- object[features,]
+  
+  time <- system.time({
+    tmp <- Seurat::ScaleData(tmp, split.by = "batch", do.center = FALSE, verbose = verbose, ...)
+    tmp <- SeuratWrappers::RunOptimizeALS(tmp, k = k, split.by = "batch", ...)
+    tmp <- SeuratWrappers::RunQuantileNorm(tmp, split.by = "batch", ...)
+  })
+  
+  object[["Liger"]] <- tmp[["iNMF"]]
+  
+  if(runningTime == FALSE)
+    return(object)
+  else
+    return(list(object = object, time = time))
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+set.seed(seed)
+x <- RunLiger(object = x, batch = "batch")
+```
+
+```{r}
+set.seed(seed)
+dimLiger <- ncol(x[["Liger"]])
+x <- GetUMAP(object = x, reduction = "Liger", dims = dimLiger, PCA = FALSE, scale = FALSE)
+DimPlot(x, group.by = "celltype")
+```
+
+CONCLUSIONS: Even though we need to perform three steps, the Seurat's wrapper functions considerable eased the implementation of Liger on Seurat objects. 
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
