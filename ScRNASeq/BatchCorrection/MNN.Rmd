@@ -1,0 +1,141 @@
+---
+title: "Wrapper for MNNCorrect"
+author: "Martin Loza"
+---
+
+On this workflow I will test the mnnCorrect method to correct batch-effects. My final goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(batchelor)
+library(Seurat)
+library(ggplot2)
+library(RNAseqAnalysis)
+
+dimPCA <- 5
+seed = 777
+sample = TRUE
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiment.
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+
+if(sample)
+  x <- RNAseqAnalysis::SampleData(object = x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+set.seed(seed)
+x <- GetPCA(object = x, dims = 30)
+DimPlot(x, group.by = "celltype")
+ElbowPlot(x)
+```
+## MNNCorrect on Seurat objects 
+
+To use mnnCorrect we need to pass the log normalized data matrix (gene x sample) and the batch labels.
+
+```{r}
+features <- VariableFeatures(x)
+data <- as.matrix(GetAssayData(x, assay = "RNA", slot = "data")[features,])
+md <- x[[]]
+
+corrData <- batchelor::mnnCorrect(data, batch = md[["batch"]])
+corrData <- SummarizedExperiment::assay(corrData, "corrected")
+
+x[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+DefaultAssay(x) <- "integrated"
+VariableFeatures(x) <- features
+x
+```
+
+mnnCorrect removed the differences from Jurkat cells.
+
+```{r}
+x <- GetPCA(object = x, nPCA = dimPCA)
+DimPlot(x, group.by = "celltype") + ggtitle("Corrected data")
+```
+## Wrapper function
+
+```{r}
+RunMNN <- function(object = NULL, batch = "batch", runningTime = FALSE, verbose = FALSE, ...){
+  
+  features <- VariableFeatures(object)
+  if(length(features) == 0){
+    warning("Variable features not defined. Running 'FindVariableFeatures' function.", call. = TRUE)
+    features <- VariableFeatures(FindVariableFeatures(object, verbose = verbose))
+  }
+    
+  data <- as.matrix(GetAssayData(object, assay = "RNA", slot = "data")[features,])
+  md <- object[[]]
+  
+  if(!(batch %in% colnames(md)))
+    stop(paste0(batch, "not found in object's metadata. Check the batch labels."))
+  
+  time <- system.time({
+    corrData <- batchelor::mnnCorrect(data, batch = md[[batch]])
+  })
+  
+  corrData <- SummarizedExperiment::assay(corrData, "corrected")
+  object[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+  DefaultAssay(object) <- "integrated"
+  VariableFeatures(object) <- features
+  
+  if(runningTime == FALSE)
+    return(object)
+  else
+    return(list(object = object, time = time))
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+x <- RunMNN(object = x, batch = "batch")
+x <- GetPCA(object = x, nPCA = dimPCA)
+DimPlot(x, group.by = "celltype") + ggtitle("Normalized")
+```
+
+CONCLUSIONS: mnnCorrect is slower than other methods, but it is easy to implement. 
+
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
