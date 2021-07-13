@@ -1,0 +1,183 @@
+---
+title: "Wrapper for Scanorama"
+author: "Martin Loza"
+---
+
+On this workflow I will test Scanorama to correct batch-effects. My final goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(reticulate)
+library(Seurat)
+library(ggplot2)
+library(RNAseqAnalysis)
+
+dimPCA <- 5
+seed = 777
+sample = TRUE
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiment.
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+
+if(sample)
+  x <- RNAseqAnalysis::SampleData(object = x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::GetPCA(object = x, dims = 30)
+DimPlot(x, group.by = "celltype")
+ElbowPlot(x)
+```
+## Scanorama on Seurat objects 
+
+We can run scanorama to get a corrected matrix with the `correct` function, or to just get the data projected onto a new common dimension with the function `integrate`. Or both with the `correct_scanpy` and setting `return_dimred=True`.
+
+To construct the wrapper for Scanorama, I will focus on the `correct` function for which we would need to set `return_dense=True`. We use the normalized counts. The data matrix must be cell x gene. 
+
+```{r}
+Scanorama <- reticulate::import("scanorama")
+features <- Seurat::VariableFeatures(x)
+objectl <- Seurat::SplitObject(x, split.by = "batch")
+
+datal <- list()
+genel <- list()
+for(i in seq_len(length(objectl))){
+  datal[[i]] <- Seurat::GetAssayData(objectl[[i]], assay = "RNA", slot = "data")[features,] # Normalized counts
+  datal[[i]] <- as.matrix(datal[[i]])
+  datal[[i]] <- t(datal[[i]]) # Cell x genes
+  
+  genel[[i]] <- colnames(datal[[i]])
+}
+
+corrDatal <- Scanorama$correct(datasets_full = datal, genes_list = genel, return_dense = TRUE)
+```
+Scanorama returns a list of batches and the genes names. We need to arrange the data to match the genes and cell names of the original seurat object.
+
+```{r}
+corrData <- Reduce(rbind, corrDatal[[1]])
+corrData <- t(corrData)
+rownames(corrData) <- corrDatal[[2]]
+colnames(corrData) <- unlist(sapply(objectl,colnames))
+
+# Cell and gene names match
+corrData <- corrData[features,colnames(x)]
+
+## Create Seurat assay
+x[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+DefaultAssay(x) <- "integrated"
+VariableFeatures(x) <- features
+```
+
+Finally, we can use the integrated data with Seurat's functions.
+
+```{r}
+set.seed(seed)
+x <- GetPCA(object = x, dims = 30)
+DimPlot(x, group.by = "celltype")
+```
+## Wrapper function
+
+```{r}
+RunScanorama <- function(object = NULL, batch = "batch", runningTime = FALSE, verbose = FALSE, ...){
+  
+  Scanorama <- reticulate::import("scanorama")
+  datal <- list()
+  genel <- list()
+  features <- Seurat::VariableFeatures(object)
+  
+  if(length(features) == 0){
+    warning("Variable features not defined. Running 'FindVariableFeatures' function.", call. = TRUE)
+    features <- Seurat::VariableFeatures(Seurat::FindVariableFeatures(object, verbose = verbose))
+  }
+  
+  if(!(batch %in% colnames(object[[]])))
+    stop(paste0(batch, "not found in object's metadata. Check the batch labels."))
+  
+  objectl <- Seurat::SplitObject(object, split.by = batch)
+  
+  for(i in seq_len(length(objectl))){
+    datal[[i]] <- Seurat::GetAssayData(objectl[[i]], assay = "RNA", slot = "data")[features,] # Normalized counts
+    datal[[i]] <- as.matrix(datal[[i]])
+    datal[[i]] <- t(datal[[i]]) # Cell x genes
+    
+    genel[[i]] <- features
+  }
+  
+  time <- system.time({
+    corrDatal <- Scanorama$correct(datasets_full = datal, genes_list = genel, return_dense = TRUE)
+  })
+  
+  corrData <- Reduce(rbind, corrDatal[[1]])
+  corrData <- t(corrData)
+  rownames(corrData) <- corrDatal[[2]]
+  colnames(corrData) <- unlist(sapply(objectl,colnames))
+  
+  # Same cell names as the original object
+  corrData <- corrData[,colnames(object)]
+  
+  ## Create Seurat assay
+  object[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+  Seurat::DefaultAssay(object) <- "integrated"
+  Seurat::VariableFeatures(object) <- features
+  
+  if(runningTime == FALSE)
+    return(object)
+  else
+    return(list(object = object, time = time))
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+x <- RunScanorama(object = x, batch = "batch")
+x <- GetPCA(object = x, nPCA = dimPCA)
+DimPlot(x, group.by = "celltype") + ggtitle("Normalized")
+```
+
+CONCLUSIONS: Using reticulate to import python function to R is quite useful. We need to take special attention to the arrange of genes and cells, as python and R have different standards. Another thing to be careful is to not loose the cells arrange after calling scanorama to match the original cells order.
+
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
