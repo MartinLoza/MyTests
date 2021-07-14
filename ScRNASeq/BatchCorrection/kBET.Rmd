@@ -1,0 +1,170 @@
+---
+title: "Wrapper for kBET"
+author: "Martin Loza"
+---
+
+On this workflow I will test the kBET method to assess batch-effects corrections. The goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(harmony)
+library(Seurat)
+library(ggplot2)
+library(kBET)
+library(RNAseqAnalysis)
+
+dimPCA <- 5
+seed = 777
+sample = TRUE
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiments.
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+
+if(sample)
+  x <- RNAseqAnalysis::SampleData(object = x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::GetPCA(x, nPCA = 30)
+Seurat::DimPlot(x, group.by = "celltype")
+```
+## kBET
+
+kBET tests batch mixing. The function `kBET` returns a "rejection score". I will apply kBET on the uncorrected datasets and the corrected data by Harmony. We can observe that Harmony corrected the batch-effects. 
+
+```{r}
+x <- RNAseqAnalysis::RunHarmony(object = x, batch = "batch", dims = dimPCA)
+Seurat::DimPlot(x, group.by = "celltype", reduction = "harmony") + ggtitle("Corrected")
+```
+
+We can observe that after correction, the rejection rate improved almost nothing.
+
+```{r}
+dataUncorrected <- as.data.frame(Seurat::Embeddings(object = x, reduction = "pca"))
+dataCorrected <- as.data.frame(Seurat::Embeddings(object = x, reduction = "harmony"))
+md <- x[[]]
+mean(kBET(df = dataUncorrected, batch = md[["batch"]], 
+          do.pca = FALSE, heuristic = TRUE, plot = FALSE)$stats$kBET.observed)
+mean(kBET(df = dataCorrected, batch = md[["batch"]],
+          do.pca = FALSE, heuristic = TRUE, plot = FALSE)$stats$kBET.observed)
+```
+
+One parameter that affect kBET's results is the number of nearest neighbours to test `k0`. Following the Benchmark from Tran et al. I will implement kBET with different `k0` as a percentage of the mean batch size.
+
+```{r}
+per <- c(0.1, 0.3)
+dataUncorrected <- as.data.frame(Seurat::Embeddings(object = x, reduction = "pca"))
+dataCorrected <- as.data.frame(Seurat::Embeddings(object = x, reduction = "harmony"))
+md <- x[[]]
+batch <- x[[]][["batch"]]
+
+rejRates <- matrix(NA, nrow = length(per), ncol = 2)
+rownames(rejRates) <- per
+colnames(rejRates) <- c("Uncorrected", "Corrected")
+
+for(p in per){
+  k0 = floor(p*(mean(table(batch))))
+  
+  rejRates[as.character(p), "Uncorrected"] <- mean(kBET(df = dataUncorrected, batch = md[["batch"]],
+                                                        do.pca = FALSE, heuristic = TRUE, k0 = k0,
+                                                        plot = FALSE)$stats$kBET.observed)
+
+  rejRates[as.character(p), "Corrected"] <- mean(kBET(df = dataCorrected, batch = md[["batch"]],
+                                                      do.pca = FALSE, heuristic = TRUE, k0 = k0,
+                                                      plot = FALSE)$stats$kBET.observed)
+}
+
+rejRates
+```
+
+It is then useful to try different k0s and set the final score as the mean value. To obtain an acceptance rate, I will subtract the rejection rate from 1.
+
+```{r}
+1-colMeans(rejRates)
+```
+
+## Wrapper function
+
+```{r}
+RunKBET <- function(object = NULL, batch = "batch", reduction = "pca", dims = 10, per = 0.1, acceptance = TRUE, verbose = FALSE, ...){
+  
+  md <- object[[]]
+  if(!(reduction %in% Seurat::Reductions(object)))
+    stop(paste0(reduction, " not found in the object's reductions."))
+  
+  if(!(batch %in% colnames(md)))
+    stop(paste0(batch, " not found in the object's meta data."))
+  
+  data <- as.data.frame(Seurat::Embeddings(object = object, reduction = reduction)[,1:dims])
+  meanBatch <- mean(table(md[[batch]])) 
+  
+  scores <- lapply(per, function(p){
+    k0 = floor(p*(meanBatch))
+    score <- mean(kBET::kBET(df = data, batch = md[[batch]], do.pca = FALSE,
+                             heuristic = FALSE, k0 = k0,
+                             plot = FALSE)$stats$kBET.observed)
+    return(score)
+  })
+  
+  scores <- unlist(scores)
+  scores <- mean(scores)
+  
+  if(acceptance)
+    scores <- 1-scores
+  
+  return(scores)
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+RunKBET(object = x, batch = "batch", reduction = "pca", dims = dimPCA, per = c(0.05, 0.1, 0.2), acceptance = TRUE)
+RunKBET(object = x, batch = "batch", reduction = "harmony", dims = dimPCA, per = c(0.05, 0.1, 0.2), acceptance = TRUE)
+```
+CONCLUSIONS: kBET tends to give low acceptance rates, this could be because of the unequal celltypes in the batches, this is, kBET assess mixing of batches, but we have batches with dissimilar celltypes (e.g. B1 only Jurkat cells, B2 with Jurkat and 293t cells). On this case a low mixing score is expected as long as is higher than the uncorrected datasets.   
+
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
