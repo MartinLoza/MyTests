@@ -1,0 +1,146 @@
+---
+title: "Wrapper for ComBat"
+author: "Martin Loza"
+---
+
+On this workflow I will test the ComBat method to correct batch-effects. My final goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(sva)
+library(Seurat)
+library(ggplot2)
+
+dimPCA <- 10
+seed = 777
+sample = TRUE
+
+source(here("Functions.R"))
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiments.
+
+```{r}
+Jurkat <- readRDS(here("Data/Jurkat/Jurkat.Rds"))
+t293 <- readRDS(here("Data/Jurkat/t293.Rds"))
+Mix50_50 <- readRDS(here("Data/Jurkat/Mix50_50.Rds"))
+
+xl <- list(Jurkat = Jurkat,
+           t293 = t293,
+           Mix50_50 = Mix50_50)
+
+x <- Reduce(merge, xl)
+
+sampleData <- function(object, frac = NULL, seed = 777, ...){
+  set.seed(seed)
+  nCells <- ncol(object)
+  samples <- floor(frac*nCells)
+  idx <- sample(x = nCells, size = samples, ... )
+  
+  return(object[,idx])
+}
+
+if(sample)
+  x <- sampleData(x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. 
+
+```{r}
+set.seed(seed)
+x <- GetPCA(x, nPCA = 30)
+DimPlot(x, group.by = "celltype")
+ElbowPlot(x)
+```
+## ComBat
+
+To use ComBat we need to pass the normalized count matrix (gene x sample) and the batch labels. 
+
+```{r}
+object <- x
+features <- Seurat::VariableFeatures(object)
+data <- as.matrix(Seurat::GetAssayData(object, assay = "RNA", slot = "data")[features,])
+md <- object[[]]
+
+corrData <- sva::ComBat(dat = data, batch = factor(md[["batch"]]))
+
+object[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+DefaultAssay(object) <- "integrated"
+VariableFeatures(object) <- features
+object
+```
+```{r}
+object <- GetPCA(object = object, nPCA = dimPCA)
+DimPlot(object, group.by = "celltype") + ggtitle("Corrected")
+```
+## Wrapper function
+
+```{r}
+RunComBat <- function(object = NULL, batch = "batch", runningTime = FALSE, verbose = FALSE, ...){
+
+  features <- Seurat::VariableFeatures(object)
+  if(length(features) == 0){
+    warning("Variable features not defined. Running 'FindVariableFeatures' function.", call. = TRUE)
+    features <- Seurat::VariableFeatures(Seurat::FindVariableFeatures(object, verbose = verbose))
+  }
+
+  data <- as.matrix(Seurat::GetAssayData(object, assay = "RNA", slot = "data")[features,])
+  md <- object[[]]
+
+  if(!(batch %in% colnames(md)))
+    stop(paste0(batch, "not found in object's metadata. Check the batch label."))
+
+  time <- system.time({
+    corrData <- sva::ComBat(dat = data, batch = md[[batch]], ...)
+  })
+
+  object[["integrated"]] <- Seurat::CreateAssayObject(counts = corrData)
+  Seurat::DefaultAssay(object) <- "integrated"
+  Seurat::VariableFeatures(object) <- features
+
+  if(runningTime == FALSE)
+    return(object)
+  else
+    return(list(object = object, time = time))
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+x <- RunComBat(object = x, batch = "batch")
+x <- GetPCA(object = x, nPCA = dimPCA)
+DimPlot(x, group.by = "celltype") + ggtitle("Normalized")
+```
+CONCLUSIONS: ComBat requires a good definition of the variable features to use, different features could lead to an erroneous correction.  
+
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
