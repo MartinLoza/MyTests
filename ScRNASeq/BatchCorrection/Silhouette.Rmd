@@ -1,0 +1,118 @@
+---
+title: "Wrapper for Silhouette"
+author: "Martin Loza"
+---
+
+On this workflow I will test the Silhouette method to assess batch-effects corrections. The goal is to create a wrapper function to use with Seurat objects.
+
+## Init
+
+```{r, setup}
+library(here)
+library(harmony)
+library(Seurat)
+library(ggplot2)
+library(kBET)
+library(RNAseqAnalysis)
+
+dimPCA <- 5
+seed = 777
+sample = TRUE
+```
+
+## Load data and create Seurat Object
+
+For this test I will use the Jurkat/293t/50:50 datasets from 10x genomics. I sampled the datasets to ease the experiments.
+
+```{r}
+xl <- readRDS(here("Data/CanekPaper/Jurkat/xl.Rds"))
+x <- Reduce(merge, xl)
+
+if(sample)
+  x <- RNAseqAnalysis::SampleData(object = x, frac = 0.2, seed = seed)
+  
+x
+table(x$batch)
+```
+
+## Preprocessing
+
+Normalization and find variable features.
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::SeuratPreprocessing(x, verbose = FALSE)
+```
+
+## PCA before correction
+
+Batch effects cause the Jurkat cells to group by batch. After correction the cells group by cluster not by batch.
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::GetPCA(x, nPCA = 30)
+x <- RNAseqAnalysis::RunHarmony(object = x, batch = "batch", dims = dimPCA)
+Seurat::DimPlot(x, group.by = "celltype") + ggtitle("Corrected")
+Seurat::DimPlot(x, group.by = "celltype", reduction = "harmony") + ggtitle("Corrected")
+```
+## Silhouette
+
+Silhouette tests cluster conformation. The closer the cluster is as compared with the other cluster, the higher the silhouette score. This help us to assess cell type preservation when we have prior knowledge of the celltypes labels. kBET package provides an implementation of Silhouette. I will use this function to create a wrapper to use with Seurat objects. We need to pass the pca data with the principal components within a list. 
+
+```{r}
+pcaUncorrected <- as.matrix(Seurat::Embeddings(x, "pca")[,1:dimPCA])
+pcaCorrected <- as.matrix(Seurat::Embeddings(x, "harmony")[,1:dimPCA])
+pcaUncorrected <- list(x = pcaUncorrected)
+pcaCorrected <- list(x = pcaCorrected)
+```
+
+We can observe that we get a higher silhouette score with the corrected data.
+
+```{r}
+md <- x[[]]
+batch <- factor(md[["celltype"]])
+kBET::batch_sil(pca.data = pcaUncorrected, batch = batch, nPCs = dimPCA)
+kBET::batch_sil(pca.data = pcaCorrected, batch = batch, nPCs = dimPCA)
+```
+## Wrapper function
+
+```{r}
+RunSilhouette <- function(object = NULL, batch = "celltype", reduction = "pca", dims = 10){
+  
+  md <- object[[]]
+  
+  if(!(reduction %in% Seurat::Reductions(object)))
+    stop(paste0(reduction, " not found in the object's reductions."))
+  
+  if(!(batch %in% colnames(md)))
+    stop(paste0(batch, " not found in the meta data."))
+  
+  batch <- factor(md[[batch]])
+  
+  pcaData <- as.matrix(Seurat::Embeddings(object = object, reduction = reduction)[,1:dims])
+  pcaData <- list(x = pcaData)
+  
+  score <- kBET::batch_sil(pca.data = pcaData, batch = batch, nPCs = dims)
+  
+  return(score)
+}
+```
+
+Testing the wrapper function.
+
+```{r}
+RunSilhouette(object = x, batch = "celltype", reduction = "pca", dims = dimPCA)
+RunSilhouette(object = x, batch = "celltype", reduction = "harmony", dims = dimPCA)
+```
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
