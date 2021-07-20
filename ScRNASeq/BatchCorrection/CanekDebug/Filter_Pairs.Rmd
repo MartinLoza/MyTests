@@ -1,0 +1,193 @@
+---
+title: "Filter pairs"
+author: "Martin Loza"
+---
+
+On this workflow I will filter the outlier pairs using the IQR measure.
+
+## Init
+
+```{r setup}
+library(Canek)
+library(CanekDebug)
+library(Seurat)
+library(here)
+library(RNAseqAnalysis)
+library(patchwork)
+library(ggplot2)
+
+seed = 777
+
+# Functions
+histPairsDistance <- function(object = NULL, cluster = NULL, plotMean = FALSE, plotMedian = FALSE, colorMean = "red", colorMedian = "blue", ...){
+  
+  pairs <- CanekDebug::GetMNNPairsData(object)
+  cluster <- CanekDebug::GetMembershipData(object)[[cluster]]
+  
+  # Subset the pairs
+  idxCells <- which(pairs$query %in% cluster$cells)
+  pairs <- pairs[idxCells,]
+  
+  data <- as.matrix(Seurat::GetAssayData(object, assay = "RNA", slot = "data"))
+  
+  # Get the pairs distance
+  distance <- sapply(seq_len(nrow(pairs)), function(idx){
+    queCell <- pairs[idx,"query"]
+    refCell <- pairs[idx,"ref"]
+    
+    queCell <- data[, queCell, drop = FALSE]
+    refCell <- data[, refCell, drop = FALSE]
+    
+    pair <- cbind(queCell, refCell)
+    return(dist(t(pair)))
+  })
+  
+  df <- data.frame(distance = distance)
+  p <- ggplot(df, aes(x = distance,...)) + geom_histogram(...) + xlab("Pairs distance")
+  
+  if(plotMean)
+    p <- p +  geom_vline(xintercept = mean(df$distance), color = colorMean)
+  if(plotMedian)
+    p <- p + geom_vline(xintercept = median(df$distance), color = colorMedian)
+  
+  return(p)
+}
+```
+
+## Load data
+
+```{r}
+xl <- Canek::SimBatches$batches
+nameBatches <- names(xl)
+xl <- lapply(nameBatches, function(n){
+  counts <- xl[[n]]
+  object <- Seurat::CreateSeuratObject(counts = counts, project = "CanekDebug")
+  object[["batch"]] <- n
+  return(object)
+})
+
+x <- Reduce(merge, xl)
+
+x[["celltype"]] <- Canek::SimBatches$cell_types
+table(x[["batch"]])
+table(x[["celltype"]])
+```
+
+## Pre-processing
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::SeuratPreprocessing(x)
+```
+
+## Umap before correction
+
+The batch-effect causes the cell-type-1 cells to group by batch
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::GetUMAP(object = x, dims = 10)
+DimPlot(x, group.by = "celltype") + DimPlot(x, group.by = "batch")
+```
+
+## Correction with Canek
+
+Canek returns the correction information if `debug = TRUE`.
+
+```{r}
+set.seed(seed)
+x <- Canek::RunCanek(x = x, batches = "batch", debug = TRUE, kNN = 500)
+```
+
+## UMAP after correction
+
+```{r}
+set.seed(seed)
+x <- RNAseqAnalysis::GetUMAP(object = x, dims = 10, assay = "Canek")
+DimPlot(x, group.by = "celltype") + DimPlot(x, group.by = "batch")
+```
+
+## Correction info
+
+For this test we will analyse the MNN pairs from cluster 1.
+
+```{r}
+pairs <- CanekDebug::GetMNNPairsData(x)
+cluster <- CanekDebug::GetMembershipData(x)[[1]]
+
+# Subset the pairs
+idxCells <- which(pairs$query %in% cluster$cells)
+pairs <- pairs[idxCells,]
+```
+
+We get the normalized data before correction, and calculate the cells pairs distance.
+
+```{r}
+data <- as.matrix(Seurat::GetAssayData(x, assay = "RNA", slot = "data"))
+
+distance <- sapply(seq_len(nrow(pairs)), function(idx){
+  
+  queCell <- pairs[idx,"query"]
+  refCell <- pairs[idx,"ref"]
+  
+  queCell <- data[, queCell, drop = FALSE]
+  refCell <- data[, refCell, drop = FALSE]
+  
+  pair <- cbind(queCell, refCell)
+  return(dist(t(pair)))
+})
+```
+
+## Quantiles 
+
+The median corresponds to the 50% quantile.
+
+```{r}
+q <- quantile(distance)
+q
+mean(distance)
+median(distance)
+```
+
+The interquantile range is given by Q1(25%) - 1.5(IQR), Q3(75%) + 1.5*IQR, where IQR = Q3-Q1.
+
+```{r}
+IQR <- q["75%"] - q["25%"]
+lowOutliers <- which(distance < (q["25%"] - (1.5*IQR)))
+highOutliers <- which(distance > (q["75%"] + (1.5*IQR)))
+outliers <- c(lowOutliers, highOutliers)
+```
+
+## Distance plots
+
+```{r fig.width=10, fig.height=5}
+binwidth = 0.05
+df1 <- data.frame(distance = distance)
+df2 <- data.frame(distance = distance[-outliers])
+
+p1 <- ggplot(df1, aes(x = distance)) +
+  geom_histogram(binwidth =  binwidth, alpha = 0.8) +
+  xlab("Pairs distance") + geom_vline(xintercept = mean(df1$distance), color = "red") + 
+  geom_vline(xintercept = median(df1$distance), color = "blue") + ggtitle(label = "Without filtering", subtitle = paste0("Mean: ", mean(df1$distance), ", Median: ", median(df1$distance)))
+
+p2 <- ggplot(df2, aes(x = distance)) +
+  geom_histogram(binwidth = binwidth, alpha = 0.8) +
+  xlab("Pairs distance") + geom_vline(xintercept = mean(df2$distance), color = "red") + 
+  geom_vline(xintercept = median(df2$distance), color = "blue") + ggtitle(label = "With filtering", subtitle = paste0("Mean: ", mean(df2$distance), ", Median: ", median(df2$distance)))
+
+p1 + p2
+```
+
+
+
+
+
+
+## Session info
+```{r}
+sessionInfo()
+```
+
+
+
+
