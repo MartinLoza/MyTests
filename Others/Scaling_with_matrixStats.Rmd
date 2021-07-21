@@ -1,0 +1,232 @@
+---
+title: "Scaling with matrixStats package"
+author: "Martin Loza"
+---
+
+Test for scaling using the matrixStats package
+
+## Init 
+
+```{r}
+library(matrixStats)
+```
+
+## Load data
+
+```{r}
+data <- iris[-5]
+```
+
+According with https://www.r-bloggers.com/2016/02/a-faster-scale-function/ the scaling by rows is faster.
+
+We first center the data 
+ 
+```{r}
+data_transformed <- t(data) #Accomodate by rows
+rm <- rowMeans(x = data_transformed, na.rm = TRUE)
+head(rm)
+```
+
+Now we center by substracting the means. The row means will be zero (or close)
+
+```{r}
+data_transformed <- data_transformed - rm
+head(rowMeans(data_transformed))
+```
+
+Now we scale the rows. We divide the rows by their standard deviations and the 
+
+```{r}
+rsd <- rowSds(data_transformed, na.rm = TRUE)
+data_transformed <- data_transformed/rsd
+head(rowSds(data_transformed))
+```
+
+What happens if one row is just zeros?
+Centering is not affected.
+
+```{r}
+data_transformed <- t(data)
+data_transformed[1,] <- 0
+rm <- rowMeans(x = data_transformed, na.rm = TRUE)
+data_transformed <- data_transformed - rm
+head(rowMeans(data_transformed))
+```
+
+The problem is scaling.... because the sd is 0, then when we divide it produces NAs. We would need to remove those zero rows.
+
+```{r}
+rsd <- rowSds(data_transformed, na.rm = TRUE)
+head(rsd)
+data_transformed <- data_transformed/rsd
+head(rowSds(data_transformed))
+```
+
+## Filtering 
+
+```{r}
+# Setup the test
+data_transformed <- t(data)
+data_transformed[1,] <- 0
+
+## Init
+cNames <- colnames(data_transformed)
+rNames <- rownames(data_transformed)
+
+## Get only zero rows 
+idx <- which(matrixStats::rowSums2(data_transformed) == 0)
+zeroName <- rNames[idx]
+zeroName
+
+zeroIdx <- !(rNames %in% zeroName)
+data_transformed <- data_transformed[zeroIdx,, drop = FALSE ]
+colnames(data_transformed) <- cNames
+
+rm <- rowMeans(x = data_transformed, na.rm = TRUE)
+data_transformed <- data_transformed - rm
+head(rowMeans(data_transformed))
+rsd <- rowSds(data_transformed, na.rm = TRUE)
+head(rsd)
+data_transformed <- data_transformed/rsd
+head(rowSds(data_transformed))
+```
+
+## Functions
+
+```{r}
+# Find rows with only zeros.
+WhichRowZeros <- function(matrix = NULL, idxReturn = FALSE){
+  
+  ## Init
+  rNames <- rownames(matrix)
+  results <- list()
+  
+  if(length(rNames) == 0)
+    rNames <- seq(1:nrow(matrix))
+  
+  ## Get row zeros names 
+  idx <- which(matrixStats::rowSums2(matrix) == 0)
+  rowZeros <- rNames[idx]
+  
+  results[["names"]] <- rowZeros
+  
+  if(idxReturn)
+    results[["idx"]] <- idx
+  
+  return(results)
+}
+
+# Filter rows with zeros
+FilterRowZeros <- function(matrix = NULL, rowZeros = NULL){
+  
+  ## Init
+  rNames <- rownames(matrix)
+  
+  if(length(rNames) == 0)
+    rNames <- seq(1:nrow(matrix))
+  
+  if(is.null(rowZeros))
+    rowZeros <- WhichRowZeros(matrix = matrix, idxReturn = TRUE)$idx
+  
+  matrix <- matrix[-zeroIdx,, drop = FALSE]
+  
+  return(matrix)
+}
+
+# Scale by rows
+RowScale <- function(matrix, center = TRUE, scale = FALSE, filterRowZeros = FALSE){
+  
+  if((filterRowZeros == FALSE) & scale){
+    if(length(WhichRowZeros(matrix = matrix)$names) != 0)
+      stop("Rows with only zeros were found. Scaling is not possible.")
+  }
+  
+  if(filterRowZeros){
+    matrix <- FilterRowZeros(matrix = matrix)
+  }
+  
+  if(center){
+    rm <- matrixStats::rowMeans2(x = matrix, na.rm = TRUE)
+    matrix <- matrix - rm
+  }
+  
+  if(scale){
+    rsd <- matrixStats::rowSds(matrix, na.rm = TRUE)
+    matrix <- matrix/rsd
+  }
+  
+  return(matrix)
+}
+```
+
+Test the functions
+
+```{r}
+# Setup the test
+data_transformed <- t(data)
+data_transformed[1,] <- 0
+
+WhichRowZeros(matrix = data_transformed, idxReturn = FALSE)
+WhichRowZeros(matrix = data_transformed, idxReturn = TRUE)
+```
+
+```{r}
+rowZeros <- WhichRowZeros(matrix = data_transformed, idxReturn = FALSE)
+
+t1 <- FilterRowZeros(matrix = data_transformed, rowZeros = rowZeros)
+t2 <- FilterRowZeros(matrix = data_transformed)
+
+identical(t1, t2)
+```
+
+```{r}
+sds <- c(1,1,1)
+rm <- rowMeans2(data_transformed[-1,] - rowMeans2(data_transformed[-1,]))
+#RowScale(matrix = data_transformed, center = TRUE, scale = TRUE, filterRowZeros = FALSE)
+
+t <- RowScale(matrix = data_transformed, center = TRUE, scale = TRUE, filterRowZeros = TRUE)
+nrow(t) == 3
+(rowSds(t) - sds) < 1e-5
+(rowMeans2(t) - rm) < 1e-5
+
+#RowScale(matrix = data_transformed, center = TRUE, scale = TRUE, filterRowZeros = FALSE)
+t <- RowScale(matrix = data_transformed, center = TRUE, scale = FALSE, filterRowZeros = TRUE)
+nrow(t) == 3
+(rowMeans2(t) - rm) < 1e-5
+
+t <- RowScale(matrix = data_transformed, center = TRUE, scale = FALSE, filterRowZeros = FALSE)
+nrow(t) == 4
+rowSds(t) != c(1,1,1,1)
+rowMeans2(t) != c(0,0,0,0)
+
+t <- RowScale(matrix = data_transformed, center = FALSE, scale = TRUE, filterRowZeros = TRUE)
+nrow(t) == 3
+rowSds(t) != c(1,1,1)
+rowMeans2(t) != c(0,0,0)
+
+t <- RowScale(matrix = data_transformed, center = FALSE, scale = TRUE, filterRowZeros = TRUE)
+nrow(t) == 3
+rowSds(t) != c(1,1,1)
+rowMeans2(t) != c(0,0,0)
+
+#t <- RowScale(matrix = data_transformed, center = FALSE, scale = TRUE, filterRowZeros = FALSE)
+
+t <- RowScale(matrix = data_transformed, center = FALSE, scale = FALSE, filterRowZeros = FALSE)
+identical(t, data_transformed)
+```
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
