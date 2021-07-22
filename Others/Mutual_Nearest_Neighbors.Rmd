@@ -180,6 +180,26 @@ df$m1 %in% dfMNN$m1
 identical(df, dfMNN)
 ```
 
+## Test with bigger data
+
+```{r}
+datal <- Canek::SimBatches$batches
+
+m1 <- t(datal[[1]])
+m2 <- t(datal[[2]])
+
+m1[1:6,1:6]
+m2[1:6,1:6]
+```
+
+```{r}
+df <- FindMNN(m1 = m1, m2 = m2, k = 10)
+head(df)
+nrow(df)
+```
+
+
+
 ## Session info
 
 ```{r}
