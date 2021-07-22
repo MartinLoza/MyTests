@@ -1,0 +1,194 @@
+---
+title: "Mutual Nearest Neighbors"
+author: "Martin Loza"
+---
+
+On this workflow I will implement the MNN algorithm. The goal is to create a function to find the MNN from a pairs of matrices
+
+## Init
+
+```{r}
+library(Canek)
+library(FNN)
+seed = 777 # Lucky seed
+```
+
+## Load data
+
+I will use the dataset from Canek package.
+
+```{r}
+datal <- Canek::SimBatches$batches
+
+sizeM1 <- 7
+set.seed(seed)
+idx <- sample(ncol(datal[[1]]), size = sizeM1, replace = FALSE)
+datal[[1]] <- datal[[1]][1:2,idx]
+
+sizeM2 <- 3
+set.seed(seed)
+idx <- sample(ncol(datal[[2]]), size = sizeM2, replace = FALSE)
+datal[[2]] <- datal[[2]][1:2,idx]
+
+m1 <- t(datal[[1]])
+rownames(m1) <- 1:sizeM1
+m2 <- t(datal[[2]])
+rownames(m2) <- 1:sizeM2
+
+m1
+m2
+```
+
+The FNN package provides a function to calculate the nearest neighbors from two matrices. The function returns a matrix with the NN indexes and their distances. The columns of the indexes matrix corresponds to the indexes of the `data` matrix, and the rows corresponds with the indexes of the `query` matrix.
+I will make a test using 2 nearest neighbors. 
+
+```{r}
+k = 2
+NN <- FNN::get.knnx(data = m2, query = m1, k = k)
+NN$nn.index
+NN$nn.dist
+nrow(NN$nn.index) == nrow(m1)
+```
+
+It's easier if we create a data frame.
+
+```{r}
+nObservations <- nrow(m1)
+df <- data.frame(matrix(data = integer(), ncol = k, nrow = nObservations*k))
+colnames(df) <- c("m1", "m2")
+df[["m1"]] <- rep(x = seq_len(nObservations), each = k)
+df[["m2"]] <- Reduce(rbind, t(NN$nn.index))
+df[["distance"]] <- Reduce(rbind, t(NN$nn.dist))
+NN$nn.index
+NN$nn.dist
+df
+```
+
+Let's check the pairs using the distances. They match!!
+
+```{r}
+distances <- as.matrix(dist(rbind(m1,m2)))
+distances[1:7,8:10]
+
+d <- sqrt((m1[1,1]- m2[1,1])^2 + (m1[1,2]- m2[1,2])^2)
+trunc(d,4) == trunc(distances[1,1],4)
+d <- sqrt((m1[5,1]- m2[3,1])^2 + (m1[5,2]- m2[3,2])^2)
+trunc(d,4) == trunc(distances[5,3],4)
+```
+
+## Function
+
+```{r}
+FindkNN <- function(m1 = NULL, m2 = NULL,k = NULL){
+  nObservations <- nrow(m1)
+  df <- data.frame(matrix(data = integer(), ncol = (k+1), nrow = nObservations*k))
+  colnames(df) <- c("m1", "m2", "distance")
+
+  NN <- FNN::get.knnx(data = m2, query = m1, k = k)
+  df[["m1"]] <- rep(x = seq_len(nObservations), each = k)
+  df[["m2"]] <- Reduce(rbind, t(NN$nn.index))
+  df[["distance"]] <- Reduce(rbind, t(NN$nn.dist))
+  
+  return(df)
+}
+```
+
+Using the function
+
+```{r}
+df2 <- FindkNN(m1 = m1, m2 = m2, k = 2)
+identical(df, df2)
+df
+df2
+```
+## MNN
+
+Now I have to find the crossed NN.
+
+```{r}
+m1m2NN <- FindkNN(m1 = m1, m2 = m2, k = 2)
+m2m1NN <- FindkNN(m1 = m2, m2 = m1, k = 2)
+colnames(m2m1NN) <- c("m2","m1", "distance")
+
+m1m2NN
+m2m1NN
+length(unique(m1m2NN$m1)) == nrow(m1)
+length(unique(m2m1NN$m1)) == nrow(m2)
+```
+
+To find the MNN we need to check whether a kNN pair is repeated. It is convinient then to bind the dfs.
+
+```{r}
+m2m1NN <- m2m1NN[,colnames(m1m2NN)]
+
+df <- rbind(m1m2NN, m2m1NN)
+df
+colnames(m1m2NN) == colnames(m2m1NN)
+nrow(df) == (sizeM1 + sizeM2)*k
+```
+
+Now we create a label to distinguish repeated pairs.
+
+```{r}
+df[["pair"]] <- paste(df$m1, df$m2, sep = "_")
+
+# short test
+mnns1 <- df$pair[duplicated(df$pair)]
+mnns2 <- names(which(table(df$pair) > 1))
+mnns2 %in% mnns1
+mnns1
+```
+
+Filtering non MNN pairs
+
+```{r}
+dfMNN <- df[duplicated(df$pair),]
+rownames(dfMNN) <- dfMNN$pair
+dfMNN <- dfMNN[,c("m1", "m2", "distance")]
+dfMNN
+rownames(dfMNN) %in% mnns1
+```
+
+## Function
+
+```{r}
+FindMNN <- function(m1 = NULL, m2 = NULL, k = NULL){
+  
+  ## Obtain the crossed kNN pairs
+  m1m2NN <- FindkNN(m1 = m1, m2 = m2, k = k)
+  m2m1NN <- FindkNN(m1 = m2, m2 = m1, k = k)
+  ## Accomodate 
+  colnames(m2m1NN) <- c("m2","m1", "distance")
+  m2m1NN <- m2m1NN[,colnames(m1m2NN)]
+  df <- rbind(m1m2NN, m2m1NN)
+  ## Find MNN
+  df[["pair"]] <- paste(df$m1, df$m2, sep = "_")
+  df <- df[duplicated(df$pair),]
+  rownames(df) <- df$pair
+  df <- df[,c("m1", "m2", "distance")]
+  
+  return(df)
+}
+```
+
+Testing the function
+
+```{r}
+df <- FindMNN(m1 = m1, m2 = m2, k = 2)
+df
+df$m1 %in% dfMNN$m1
+identical(df, dfMNN)
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
