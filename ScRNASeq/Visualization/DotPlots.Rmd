@@ -1,0 +1,207 @@
+---
+title: "Seurat-objects"
+author: "Martin Loza"
+---
+
+On this workflow I will explore dotplots.
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width=5, 
+  fig.height=5
+)
+```
+
+Load some libraries
+
+```{r setup }
+library(ggplot2)
+library(Seurat)
+library(here)
+library(tidyverse)
+library(cowplot)
+
+seed = 777
+
+# Scales the plot color gradient to a given scale (limits) and colors.
+ScaleGradient <- function(plot, colLow = "gray", colHigh = "purple", limits = NULL){
+  if(is.null(limits)){
+    stop("No defined limits. Select the limits and try again.", call. = TRUE)
+  }
+  plot <- plot + scale_color_gradient(low = colLow, high = colHigh, limits = limits)  
+  
+  return(plot)
+}
+```
+
+We load the FACS data from [tabula muris](https://ndownloader.figshare.com/files/13092395) 
+
+```{r}
+load(file = here("Data/Tabula_Muris/facs_Thymus_seurat_tiss.Robj"))
+x <- UpdateSeuratObject(tiss)
+x <- NormalizeData(x, verbose = FALSE)
+x <- FindVariableFeatures(x, verbose = FALSE)
+rm(tiss)
+x
+```
+
+# Arrange the data
+
+Lets arrange the data to plot normalized counts for now. We need:
+ * *avg_count* the gene average expression per group (e.g. celltype, cluster, etc.)
+ * *n_cells_group* the total number of cells from each group
+ * *n_expressing_cells* the number of cells with detectable (>0) expression for each gene per cluster.
+Let's start with the gene average expression per group. To ease the use of different data in the future, we will associate the data with a general label "avg_count". We need the group labels to split the data, find the average and join the results back into a single data frame.
+
+```{r}
+# sample to ease processing
+idxCells <- sample(1:ncol(x), size = 300, replace = FALSE)
+selGenes <- VariableFeatures(x)[1:10] # use the first 10 genes
+
+datal <- SplitObject(x[selGenes, idxCells], split.by = "cell_ontology_class")
+namesl <- names(datal)
+df <- lapply(namesl, function(n){
+  
+  tmp <- t(as.matrix(GetAssayData(datal[[n]], assay = "RNA", slot = "data")))
+  df <- as.data.frame(colMeans(tmp))
+  colnames(df) <- "avg_count"
+  
+  expressing <- colSums(tmp > 0)
+  
+  df[["n_expressing_cells"]] <- expressing[rownames(df)]
+  df[["n_cells_group"]] <- nrow(tmp)
+  df <-  mutate(df, per_expressing = (n_expressing_cells/n_cells_group)*100)
+  df[["group"]] <- n
+  df[["gene"]] <- rownames(df)
+  
+  order <- c("gene", "avg_count", "group", "per_expressing", "n_cells_group", "n_expressing_cells")
+  df <- df[order]
+  
+  return(df)
+})
+df <- df %>% reduce(rbind)
+df
+```
+
+## Dotplot 
+
+We can create the dotplot and compare with the seurat ones. The difference from Seurat is that they "un-normalize" the data using the `expm1` function, then find the average expression and then normalize again using the `log1p` function. In my case, I just take the average of the already normalized counts, (used by scanpy... I think). It would be interesting to check how this change affects. Anyways, because mainly we are interested on visualize differences, both options are acceptable.
+ 
+```{r fig.width=7}
+df$gene <- factor(df$gene, levels = selGenes )
+p <- ggplot(df, aes(x=group, y = gene, color = avg_count, size = per_expressing)) + 
+  geom_point() + 
+  coord_flip() + 
+  theme_cowplot() + 
+  labs(col = "Average expression", size = "Percentage expressing") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p <- ScaleGradient(p, colHigh = "blue", limits = c(0, max(df$avg_count))) 
+p
+
+DotPlot(x[,idxCells], group.by = "cell_ontology_class",  features = selGenes, scale = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+We can create functions to use in further analyses.
+
+```{r}
+GetDfDotPlot <- function(object = NULL, genes = NULL, group = NULL, type = "avg_logcounts", scale = FALSE, ...){
+  
+  if(is.null(genes)){
+    warning("No genes provided. The top 10 variable features will be used.", call. = TRUE)
+    features <- Seurat::VariableFeatures(object)[1:10]
+    
+    if(is.null(features)){
+      object <- Seurat::FindVariableFeatures(object, verbose = FALSE)
+      features <- Seurat::VariableFeatures(object)[1:10]
+    }
+  }else{
+    features <- genes
+  }
+  
+  object <- object[features,]
+  
+  if(!is.null(group)){
+    datal <- Seurat::SplitObject(object, split.by = group)
+  }else{
+    datal = list(object)
+    names(datal) <- "object"
+  }
+  
+  if(type == "avg_scaled")
+    scale = TRUE
+  
+  namesl <- names(datal)
+  df <- lapply(namesl, function(n){
+    
+    if(type == "avg_counts"){
+      tmp <- t(as.matrix(Seurat::GetAssayData(datal[[n]], assay = "RNA", slot = "counts")))
+      avg_expression <- colMeans(tmp)
+    }else if(type == "avg_logcounts" || type == "avg_scaled"){
+      tmp <- t(as.matrix(Seurat::GetAssayData(datal[[n]], assay = "RNA", slot = "data")))
+      avg_expression <- colMeans(tmp)
+    }else if(type == "seurat"){
+      tmp <- t(as.matrix(Seurat::GetAssayData(datal[[n]], assay = "RNA", slot = "data")))
+      avg_expression <- colMeans(expm1(tmp))
+      avg_expression <- log1p(avg_expression)
+    }else if(type == "avg_scaled"){
+      tmp <- t(as.matrix(Seurat::GetAssayData(datal[[n]], assay = "RNA", slot = "scale.data")))
+      avg_expression <- colMeans(tmp)
+    }
+    
+    expressing <- colSums(tmp > 0)
+    
+    df <- as.data.frame(avg_expression)
+    
+    df[["n_expressing_cells"]] <- expressing[rownames(df)]
+    df[["n_cells_group"]] <- nrow(tmp)
+    df <-  plyr::mutate(df, per_expressing = (n_expressing_cells/n_cells_group)*100)
+    df[["group"]] <- n
+    df[["gene"]] <- rownames(df)
+    
+    order <- c("gene", "avg_expression", "group", "per_expressing", "n_cells_group", "n_expressing_cells")
+    df <- df[order]
+    
+    return(df)
+  })
+  df <- df %>% reduce(rbind)
+  
+  if(scale == TRUE){
+    df$avg_expression <- scale(df$avg_expression)
+  }
+  
+  df$gene <- factor(df$gene, levels = features )
+  
+  return(df)
+}
+
+GetDotPlot <- function(object = NULL, genes = NULL, group = NULL, scale = FALSE, type = "avg_logcounts", ...){
+  if(is.null(object))
+    stop("Error. Object need to be defined.", call. = TRUE)
+  
+  df <- GetDfDotPlot(object = object, genes = genes, group = group, type = type, scale = scale)
+  
+  p <- ggplot(df, aes(x=group, y = gene, color = avg_expression, size = per_expressing)) + 
+    geom_point() + 
+    coord_flip() + 
+    theme_cowplot() + 
+    labs(col = "Average expression", size = "Percentage expressing") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  p <- ScaleGradient(p, limits = c(min(df$avg_expression), max(df$avg_expression)), ...) 
+  return(p)
+}
+```
+
+Using the functions.
+
+```{r}
+GetDotPlot(object = x, genes = selGenes, group = "cell_ontology_class", colHigh = "steelblue" )
+```
+CONCLUSIONS: Seurat's DotPlot is useful and easy to use, the problem it's that we dont' have much flexibility to change the information displayes. By using my own function, I am free to use any info I need by just changing some short code lines. 
+
+
+
+
+
+
