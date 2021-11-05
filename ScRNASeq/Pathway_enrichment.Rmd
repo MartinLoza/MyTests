@@ -188,7 +188,7 @@ type can take three possible values:
 - negative: get genes with the top negative logFC
 
 ```{r}
-top <- GetTopGenes(deg = deg, fold = 3.0, type = "double")
+top <- GetTopGenes(deg = deg, fold = 2.0, type = "double")
 ```
 
 ### Get the KEEG pathways
@@ -219,7 +219,6 @@ plots <- list()
 cellLabels <- names(lsPathways)
 for(cell in cellLabels){
   df <- lsPathways[[cell]]
-  df["Celltype"] <- cell
   plots[[cell]] <- plotKEGG(df = df, type = "double", color_by = "Direction",  ntop = 20, point_size = 5) + ggtitle(cell)
 }
 plots
