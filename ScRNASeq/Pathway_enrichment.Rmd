@@ -1,0 +1,226 @@
+---
+title: "Pathway enrichment with KEGG"
+author: "Martin Loza"
+---
+
+In this notebook I will use the KEGG database to explore pathways correlated with the spleen droplets dataset from Tabula muris
+
+## Setup
+
+```{r}
+library(Seurat)
+library(RNAseqAnalysis)
+library(here)
+library(ggplot2)
+library(patchwork)
+library(tidyverse)
+library(AnnotationDbi)
+library(limma)
+# library(pathview)
+
+seed = 777
+
+inFile <- here("Data/Tabula_Muris")
+
+## Functions
+GetTopGenes <- function(deg = NULL, pval = 0.05, fold = 1.5, type = "double", ntop = NULL, group = NULL){
+  
+  FCthreshold <- log2(fold)
+  
+  if(type ==  "double"){
+    topGenes <- deg %>% filter(p_val_adj < pval & abs(avg_log2FC) > FCthreshold)
+  }else if(type == "positive"){
+    topGenes <- deg %>% filter(p_val_adj < pval & avg_log2FC > FCthreshold)
+  }else{
+    topGenes <- deg %>% filter(p_val_adj < pval & avg_log2FC < FCthreshold)
+  }
+    
+  if(!is.null(ntop)){
+    if(!is.null(group)){
+      warning("Top genes by clusters", call. = TRUE)
+      group = "cluster"
+    }
+    
+    topGenes <- topGenes %>% group_by(cluster) %>% top_n(n = ntop)
+  }
+    
+  return(topGenes)
+}
+
+getKEGGPathways <- function(df = NULL, species = "human"){
+ 
+  up <- df %>% filter(avg_log2FC > 0) %>% pull(gene)
+  down <- df %>% filter(avg_log2FC < 0) %>% pull(gene)
+  
+  if(species == "human"){
+    if (length(up) > 0)
+      up <- AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db, up, "ENTREZID", "SYMBOL")
+    if (length(down) > 0)
+      down <- AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db, down, "ENTREZID", "SYMBOL")
+    
+    genes <- list(Up = up, Down = down)
+    pathways <- limma::kegga(genes, species = "Hs")
+    
+  }else if(species == "mouse"){
+    if (length(up) > 0)
+      up <- AnnotationDbi::mapIds(org.Mm.eg.db::org.Mm.eg.db, up, "ENTREZID", "SYMBOL")
+    if (length(down) > 0)
+      down <- AnnotationDbi::mapIds(org.Mm.eg.db::org.Mm.eg.db, down, "ENTREZID", "SYMBOL")
+    
+    genes <- list(Up = up, Down = down)
+    pathways <- limma::kegga(genes, species = "Mm")
+  }
+  
+  # adjust p values
+  pathways <- pathways %>% mutate(adj.P.Up = p.adjust(pathways[["P.Up"]], method = "bonferroni"))
+  pathways <- pathways %>% mutate(adj.P.Down = p.adjust(pathways[["P.Down"]], method = "bonferroni"))
+  
+  # signed log p-values
+  pathways <- pathways %>% mutate(logP.Up = -log10(adj.P.Up)) # -log to obtain positive values for UP
+  pathways <- pathways %>% mutate(logP.Down = log10(adj.P.Down))# log to obtain negative values for UP
+  
+  return(pathways)
+}
+
+TextSize <- function(size = 10 ){
+  tmp_theme <- theme(text = element_text(size = size))
+  return(tmp_theme)
+}
+
+getTopKEGG <- function(df = NULL, top.by = "Selected_PV", type = "double" , ntop = 20){
+  
+  if(type == "double"){
+    idx <- sort(abs(df[[top.by]]), decreasing = TRUE, index.return = TRUE)$ix
+  }else if(type == "positive"){
+    idx <- sort(df[[top.by]], decreasing = TRUE, index.return = TRUE)$ix
+  }else{
+    idx <- sort(df[[top.by]], decreasing = FALSE, index.return = TRUE)$ix
+  }
+  
+  idx <- idx[1:ntop]
+  tmp <- df[idx,]
+  
+  return(tmp)
+}
+
+sortDF <- function(df = NULL, sort.by = NULL, decreasing = TRUE){
+  idx <- sort(df[[sort.by]], decreasing = decreasing, index.return = TRUE)$ix
+  tmp <- df[idx,]
+  return(tmp)
+}
+
+plotKEGG <- function(df = NULL, type = "double", ntop = 20, color_by = "Direction", point_size = 3, text_size = 15){
+  
+  # SETUP 
+  ## setup direction and selected p-values
+  
+  # first column are positive pv, second column are negative pv 
+  tmp <- cbind(abs(df$logP.Up), abs(df$logP.Down))
+  idxMax <- apply(tmp, MARGIN = 1, which.max)
+  direction <- rep(NA, nrow(tmp)) 
+  direction[(idxMax == 1)] <- "up"
+  direction[(idxMax == 2)] <- "down"
+  
+  selPV <- rep(NA, nrow(tmp)) 
+  selPV[(idxMax == 1)] <- tmp[(idxMax == 1),1]
+  selPV[(idxMax == 2)] <- -tmp[(idxMax == 2),2]
+  
+  df <- df %>% mutate(Direction = direction)
+  df <- df %>% mutate(Selected_PV = selPV)
+  
+  topKegg <- getTopKEGG(df = df, type = type, top.by = "Selected_PV", ntop = ntop)
+  topKegg <- sortDF(df = topKegg, sort.by = "Selected_PV", decreasing = FALSE)
+  levels <- topKegg$Pathway
+  topKegg[["Pathway"]] <- factor(topKegg[["Pathway"]], levels = levels)
+  
+  p <- ggplot(topKegg, aes_string(x = "Selected_PV", y = "Pathway", color = color_by)) +
+    geom_point(size = point_size) +
+    theme_classic() + 
+    labs(x = expression(paste('Signed ', -log[10],'(adjusted p-value)')),
+         y = "KEGG Pathways") + 
+    TextSize(size = text_size)
+  
+  return(p)
+}
+
+
+```
+
+## Load data
+
+```{r}
+load(file = paste0(inFile, "/droplet_Spleen_seurat_tiss.Robj"))
+x <- tiss
+rm(tiss)
+gc()
+x <- Seurat::UpdateSeuratObject(x)
+```
+
+### Pre-processing and exploratory analysis
+
+```{r}
+x <- RNAseqAnalysis::SeuratPreprocessing(object = x, verbose = FALSE)
+x <- RNAseqAnalysis::GetPCA(object = x, dims = 30, verbose = FALSE)
+Seurat::ElbowPlot(x)
+pcaDims = 15
+```
+
+```{r}
+x <- Seurat::RunUMAP(object = x, dims = 1:pcaDims, verbose = FALSE)
+```
+
+```{r}
+Seurat::DimPlot(x, group.by = "cell_ontology_class")
+```
+
+## Differential gene expression by annotated cell types
+
+```{r}
+Seurat::Idents(object = x) <- "cell_ontology_class"
+deg <- Seurat::FindAllMarkers(object = x, assay = "RNA", max.cells.per.ident = 500)
+```
+
+### Filter the genes
+
+type can take three possible values: 
+- double: get genes with the top positive and negative logFC
+- positive: get genes with the top positive logFC
+- negative: get genes with the top negative logFC
+
+```{r}
+top <- GetTopGenes(deg = deg, fold = 3.0, type = "double")
+```
+
+### Get the KEEG pathways
+
+The species parameter needs to be specified as "human" or "mouse"
+
+```{r}
+cluNames <- levels(top$cluster)
+lsPathways <- lapply(cluNames, function(n){
+  tmp <- subset(top, cluster == n)
+  pathways <- getKEGGPathways(df = tmp, species = "mouse")
+  return(pathways)
+})
+names(lsPathways) <- cluNames
+```
+
+### Plot the patways
+
+type can take three possible values: 
+- double: get pathways with the top positive and negative -log10(PV)
+- positive: get pathways with the top positive -log10(PV)
+- negative: get pathways with the top negative -log10(PV)
+
+The default color is "Direction", a label internally created.
+
+```{r}
+plots <- list()
+cellLabels <- names(lsPathways)
+for(cell in cellLabels){
+  df <- lsPathways[[cell]]
+  df["Celltype"] <- cell
+  plots[[cell]] <- plotKEGG(df = df, type = "double", color_by = "Direction",  ntop = 20, point_size = 5) + ggtitle(cell)
+}
+plots
+```
